@@ -9,6 +9,10 @@ export interface GroupMember {
   addedAt: string;
   joinedVia?: 'invite_code' | 'email_invite' | 'creator';
   inviteCodeUsed?: string;
+  upiId?: string;
+  upiAddedBy?: string;
+  upiPendingConfirmation?: boolean;
+  phoneNumber?: string;
 }
 
 export interface ExpenseGroup {
@@ -25,6 +29,23 @@ export interface ExpenseGroup {
   previousInviteCodes?: string[];
   createdAt: string;
   updatedAt?: string;
+  type?: 'budget' | 'split';
+}
+
+export type SplitMode = 'equal' | 'exact';
+
+export interface SplitMemberShare {
+  memberKey: string; // UID or email
+  name: string;
+  amount: number;
+}
+
+export interface TransactionEditRecord {
+  editedAt: string;
+  editedBy?: string;
+  editedByName: string;
+  previousAmount?: number;
+  previousName?: string;
 }
 
 export interface Transaction {
@@ -42,6 +63,31 @@ export interface Transaction {
   createdAt?: string;
   recurringExpenseId?: string;
   recurringInstanceDate?: string;
+
+  // Edit history tracking
+  lastEditedBy?: string;
+  lastEditedByName?: string;
+  lastEditedAt?: string;
+  editCount?: number;
+  editHistory?: TransactionEditRecord[];
+
+  // Soft-delete / Trash retention tracking (30 days)
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
+  deletedByName?: string;
+  deletedReason?: string;
+
+  // Split Ledger specific fields
+  paidBy?: string; // UID or email of the person who paid
+  paidByName?: string; // Display name of payer
+  splitMode?: SplitMode; // 'equal' or 'exact'
+  splitMembers?: string[]; // Array of member keys (UID or emails) involved in split
+  splits?: Record<string, number>; // Map of memberKey to exact cut amount
+  isSettlement?: boolean; // True if this transaction is a debt settlement payment
+  settledTo?: string; // Member key who received the payment
+  settledToName?: string; // Display name of recipient
+  settledMembers?: string[]; // Array of member keys whose dues have been settled for this expense
 }
 
 export interface ShoppingItem {
@@ -88,13 +134,18 @@ export interface UserProfile {
   photoURL?: string;
   createdAt: string;
   lastLoginAt: string;
+  upiId?: string;
+  phoneNumber?: string;
 }
 
 export type NotificationType = 
   | 'DAILY_EXPENSE_SUMMARY' 
   | 'BUYING_ITEM_ADDED' 
   | 'MEMBER_JOINED' 
-  | 'INVITE_CODE_ROTATED';
+  | 'INVITE_CODE_ROTATED'
+  | 'SPLIT_EXPENSE_ADDED'
+  | 'SETTLEMENT_RECORDED'
+  | 'SETTLEMENT_REMINDER';
 
 export interface AppNotification {
   id: string;
@@ -114,4 +165,8 @@ export interface AppNotification {
   createdByName?: string;
   createdAt: string;
   readBy?: string[];
+  // Split specific notification data
+  paidByName?: string;
+  settledToName?: string;
+  splitMembersCount?: number;
 }

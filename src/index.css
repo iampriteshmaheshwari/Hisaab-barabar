@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-google-blue: var(--google-blue);
   --color-google-blue-hover: var(--google-blue-hover);

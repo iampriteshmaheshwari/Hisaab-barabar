@@ -27,7 +27,15 @@ import {
   Briefcase,
   Loader2,
   Info,
-  Sparkles
+  Sparkles,
+  Bike,
+  Music,
+  Gamepad2,
+  Heart,
+  Wrench,
+  Baby,
+  Palette,
+  Trophy
 } from 'lucide-react';
 import type { CategoryData, Transaction, ShoppingItem, RecurringExpense, UserRole } from '../../types';
 
@@ -46,76 +54,114 @@ interface CategoryModalProps {
 }
 
 const COLOR_PALETTE = [
-  '#0B57D0', // Google Blue
-  '#146C2E', // Google Green
-  '#BA1A1A', // Google Red
-  '#E37400', // Google Amber/Orange
-  '#7C3AED', // Purple
-  '#DB2777', // Pink
-  '#0891B2', // Cyan
-  '#059669', // Emerald
-  '#D97706', // Ochre
-  '#475569'  // Slate
+  '#DB2777', // Vivid Pink
+  '#9333EA', // Deep Purple
+  '#06B6D4', // Fresh Mint / Cyan
+  '#E11D48', // Bright Coral
+  '#D946EF', // Electric Fuchsia
+  '#84CC16', // Fresh Lime
+  '#6366F1', // Indigo / Periwinkle
+  '#CA8A04', // Saffron / Gold
+  '#0891B2', // Deep Ocean
+  '#10B981', // Emerald Mint
+  '#F97316', // Bright Tangerine
+  '#8B5CF6', // Soft Lavender
+  '#0B57D0', // Royal Blue
+  '#B45309', // Terracotta Bronze
+  '#475569', // Charcoal Slate
+  '#059669'  // Classic Green
 ];
 
-const PRESET_KEYS = ['groceries', 'utilities', 'investments', 'other'];
+const PRESET_KEYS = [
+  'groceries',
+  'food',
+  'utilities',
+  'rent',
+  'travel',
+  'medical',
+  'shopping',
+  'education',
+  'investments',
+  'other'
+];
 
 export const ICON_MAP: Record<string, any> = {
+  // Built-in categories
   ShoppingCart,
-  Zap,
-  TrendingUp,
-  Tag,
-  Plane,
   Utensils,
-  Coffee,
+  Zap,
   Home,
   Car,
-  ShoppingBag,
-  Dumbbell,
-  Film,
   HeartPulse,
-  Gift,
+  ShoppingBag,
   BookOpen,
-  Briefcase
+  TrendingUp,
+  Tag,
+  // Custom categories library
+  Dumbbell,
+  Plane,
+  Coffee,
+  Film,
+  Sparkles,
+  Gift,
+  Briefcase,
+  Bike,
+  Music,
+  Gamepad2,
+  Heart,
+  Wrench,
+  Baby,
+  Palette,
+  Trophy
 };
 
+// Rich, expressive icon library tailored specifically for creating custom categories
 const POPULAR_ICONS = [
-  { name: 'Tag', label: 'General' },
-  { name: 'Utensils', label: 'Food & Dining' },
-  { name: 'Plane', label: 'Travel & Trips' },
-  { name: 'ShoppingCart', label: 'Groceries' },
-  { name: 'Home', label: 'Rent & Stay' },
-  { name: 'Car', label: 'Transport' },
-  { name: 'Coffee', label: 'Coffee & Snacks' },
-  { name: 'ShoppingBag', label: 'Shopping' },
-  { name: 'Dumbbell', label: 'Fitness' },
-  { name: 'Film', label: 'Entertainment' },
-  { name: 'HeartPulse', label: 'Healthcare' },
-  { name: 'Zap', label: 'Utilities' },
-  { name: 'TrendingUp', label: 'Investments' },
-  { name: 'Gift', label: 'Gifts' },
-  { name: 'BookOpen', label: 'Education' },
-  { name: 'Briefcase', label: 'Work' }
+  { name: 'Dumbbell', label: 'Gym & Fitness' },
+  { name: 'Plane', label: 'Vacations & Trips' },
+  { name: 'Coffee', label: 'Cafe & Hangouts' },
+  { name: 'Film', label: 'Movies & OTT' },
+  { name: 'Sparkles', label: 'Beauty & Salon' },
+  { name: 'Gift', label: 'Gifts & Pooja' },
+  { name: 'Briefcase', label: 'Work & Office' },
+  { name: 'Bike', label: 'Bike & Scooter' },
+  { name: 'Music', label: 'Music & Hobbies' },
+  { name: 'Gamepad2', label: 'Gaming & Fun' },
+  { name: 'Heart', label: 'Charity & Donations' },
+  { name: 'Wrench', label: 'Repairs & Tools' },
+  { name: 'Baby', label: 'Kids & Family' },
+  { name: 'Palette', label: 'Art & Craft' },
+  { name: 'Trophy', label: 'Sports & Games' },
+  { name: 'Tag', label: 'General / Custom' }
 ];
 
 export function getSmartCategoryIcon(name: string, explicitIcon?: string): string {
   if (explicitIcon && ICON_MAP[explicitIcon]) return explicitIcon;
   const lower = name.toLowerCase().trim();
-  if (lower.includes('grocer') || lower.includes('supermarket') || lower.includes('market')) return 'ShoppingCart';
-  if (lower.includes('utilit') || lower.includes('electric') || lower.includes('bill') || lower.includes('power') || lower.includes('water')) return 'Zap';
-  if (lower.includes('invest') || lower.includes('stock') || lower.includes('mutual') || lower.includes('crypto')) return 'TrendingUp';
-  if (lower.includes('food') || lower.includes('dining') || lower.includes('restaurant') || lower.includes('eat') || lower.includes('lunch') || lower.includes('dinner')) return 'Utensils';
-  if (lower.includes('cafe') || lower.includes('coffee') || lower.includes('tea') || lower.includes('starbucks')) return 'Coffee';
-  if (lower.includes('travel') || lower.includes('trip') || lower.includes('flight') || lower.includes('vacation') || lower.includes('tour') || lower.includes('pune') || lower.includes('mumbai') || lower.includes('goa') || lower.includes('hotel')) return 'Plane';
-  if (lower.includes('rent') || lower.includes('home') || lower.includes('house') || lower.includes('flat') || lower.includes('stay') || lower.includes('pg')) return 'Home';
-  if (lower.includes('car') || lower.includes('cab') || lower.includes('uber') || lower.includes('ola') || lower.includes('petrol') || lower.includes('fuel') || lower.includes('transport') || lower.includes('taxi')) return 'Car';
-  if (lower.includes('shop') || lower.includes('clothes') || lower.includes('cloth') || lower.includes('amazon') || lower.includes('flipkart') || lower.includes('myntra')) return 'ShoppingBag';
-  if (lower.includes('gym') || lower.includes('fit') || lower.includes('workout') || lower.includes('sport')) return 'Dumbbell';
-  if (lower.includes('movie') || lower.includes('cinema') || lower.includes('film') || lower.includes('netflix') || lower.includes('prime') || lower.includes('game')) return 'Film';
-  if (lower.includes('health') || lower.includes('doctor') || lower.includes('medic') || lower.includes('hospital') || lower.includes('clinic')) return 'HeartPulse';
-  if (lower.includes('gift') || lower.includes('present') || lower.includes('birthday') || lower.includes('party')) return 'Gift';
-  if (lower.includes('book') || lower.includes('study') || lower.includes('course') || lower.includes('school') || lower.includes('college')) return 'BookOpen';
-  if (lower.includes('work') || lower.includes('office') || lower.includes('salary') || lower.includes('business')) return 'Briefcase';
+  if (lower.includes('gym') || lower.includes('fit') || lower.includes('workout') || lower.includes('yoga') || lower.includes('exercise')) return 'Dumbbell';
+  if (lower.includes('flight') || lower.includes('trip') || lower.includes('vacation') || lower.includes('tour') || lower.includes('pune') || lower.includes('mumbai') || lower.includes('goa') || lower.includes('hotel')) return 'Plane';
+  if (lower.includes('cafe') || lower.includes('coffee') || lower.includes('tea') || lower.includes('chai') || lower.includes('starbucks')) return 'Coffee';
+  if (lower.includes('movie') || lower.includes('cinema') || lower.includes('film') || lower.includes('netflix') || lower.includes('prime') || lower.includes('hotstar') || lower.includes('theatre')) return 'Film';
+  if (lower.includes('personal') || lower.includes('salon') || lower.includes('parlour') || lower.includes('groom') || lower.includes('beauty') || lower.includes('haircut') || lower.includes('spa')) return 'Sparkles';
+  if (lower.includes('pooja') || lower.includes('puja') || lower.includes('mandir') || lower.includes('gift') || lower.includes('shagun') || lower.includes('lifafa') || lower.includes('festival') || lower.includes('diwali') || lower.includes('rakhi')) return 'Gift';
+  if (lower.includes('work') || lower.includes('office') || lower.includes('freelance') || lower.includes('client') || lower.includes('business')) return 'Briefcase';
+  if (lower.includes('bike') || lower.includes('scooter') || lower.includes('motorcycle') || lower.includes('bullet') || lower.includes('activa')) return 'Bike';
+  if (lower.includes('music') || lower.includes('concert') || lower.includes('song') || lower.includes('spotify') || lower.includes('guitar')) return 'Music';
+  if (lower.includes('game') || lower.includes('gaming') || lower.includes('playstation') || lower.includes('xbox') || lower.includes('esport')) return 'Gamepad2';
+  if (lower.includes('charity') || lower.includes('donation') || lower.includes('ngo') || lower.includes('fund') || lower.includes('help')) return 'Heart';
+  if (lower.includes('repair') || lower.includes('tool') || lower.includes('service') || lower.includes('mechanic') || lower.includes('hardware')) return 'Wrench';
+  if (lower.includes('baby') || lower.includes('kid') || lower.includes('child') || lower.includes('diaper') || lower.includes('toy')) return 'Baby';
+  if (lower.includes('art') || lower.includes('craft') || lower.includes('paint') || lower.includes('drawing') || lower.includes('hobby')) return 'Palette';
+  if (lower.includes('sport') || lower.includes('cricket') || lower.includes('football') || lower.includes('badminton') || lower.includes('trophy')) return 'Trophy';
+  if (lower.includes('grocer') || lower.includes('kirana') || lower.includes('ration') || lower.includes('supermarket') || lower.includes('market') || lower.includes('sabzi') || lower.includes('vegetable')) return 'ShoppingCart';
+  if (lower.includes('food') || lower.includes('dining') || lower.includes('restaurant') || lower.includes('eat') || lower.includes('swiggy') || lower.includes('zomato') || lower.includes('lunch') || lower.includes('dinner') || lower.includes('snack') || lower.includes('mithai')) return 'Utensils';
+  if (lower.includes('utilit') || lower.includes('electric') || lower.includes('bijli') || lower.includes('bill') || lower.includes('power') || lower.includes('water') || lower.includes('recharge') || lower.includes('wifi') || lower.includes('gas') || lower.includes('cylinder')) return 'Zap';
+  if (lower.includes('rent') || lower.includes('maintenance') || lower.includes('home') || lower.includes('house') || lower.includes('flat') || lower.includes('stay') || lower.includes('pg') || lower.includes('maid') || lower.includes('cook') || lower.includes('bai')) return 'Home';
+  if (lower.includes('travel') || lower.includes('commute') || lower.includes('petrol') || lower.includes('fuel') || lower.includes('diesel') || lower.includes('auto') || lower.includes('cab') || lower.includes('uber') || lower.includes('ola') || lower.includes('rapido') || lower.includes('metro') || lower.includes('fastag') || lower.includes('toll')) return 'Car';
+  if (lower.includes('health') || lower.includes('medic') || lower.includes('doctor') || lower.includes('chemist') || lower.includes('hospital') || lower.includes('clinic') || lower.includes('dawai') || lower.includes('tablet')) return 'HeartPulse';
+  if (lower.includes('shop') || lower.includes('clothes') || lower.includes('cloth') || lower.includes('amazon') || lower.includes('flipkart') || lower.includes('myntra') || lower.includes('meesho') || lower.includes('shoes')) return 'ShoppingBag';
+  if (lower.includes('educat') || lower.includes('fee') || lower.includes('school') || lower.includes('college') || lower.includes('tuition') || lower.includes('coaching') || lower.includes('book') || lower.includes('stationery')) return 'BookOpen';
+  if (lower.includes('invest') || lower.includes('emi') || lower.includes('sip') || lower.includes('mutual') || lower.includes('stock') || lower.includes('insurance') || lower.includes('lic') || lower.includes('gold')) return 'TrendingUp';
   return 'Tag';
 }
 
@@ -365,7 +411,7 @@ export function CategoryModal({
                   setEditingKey(null);
                   setName('');
                   setHex(COLOR_PALETTE[0]);
-                  setSelectedIcon('Tag');
+                  setSelectedIcon('Dumbbell');
                   setDeleteTargetKey(null); 
                 }}
                 className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
@@ -627,7 +673,7 @@ export function CategoryModal({
                   autoFocus
                   value={name}
                   onChange={(e) => handleNameChange(e.target.value)}
-                  placeholder="e.g. Travel, Gym, Healthcare, Gifts"
+                  placeholder="e.g. Gym & Fitness, Vacation, Pets, Charity"
                   className="w-full px-3.5 py-2.5 rounded-2xl bg-surface-hover/60 border border-border text-sm text-text-primary outline-none focus:border-google-blue focus:ring-1 focus:ring-google-blue transition-all"
                   maxLength={26}
                 />

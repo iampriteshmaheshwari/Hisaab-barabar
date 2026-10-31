@@ -17,7 +17,8 @@ import {
   LogOut,
   AlertTriangle,
   RotateCw,
-  LogIn
+  LogIn,
+  Wallet
 } from 'lucide-react';
 import type { ExpenseGroup, UserRole, GroupMember } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -28,6 +29,7 @@ import {
   updateMemberRole,
   regenerateGroupInviteCode
 } from '../../services/expenseService';
+import { shareGroupInviteLink, copyGroupInviteCode } from '../../utils/shareUtils';
 
 interface GroupModalProps {
   isOpen: boolean;
@@ -37,9 +39,10 @@ interface GroupModalProps {
   onSelectGroup: (groupId: string) => void;
   userRole: UserRole;
   initialTab?: 'members' | 'groups' | 'create';
-  onCreateGroup?: (name: string) => Promise<ExpenseGroup | null>;
+  onCreateGroup?: (name: string, type?: 'budget' | 'split') => Promise<ExpenseGroup | null>;
   onDeleteGroup?: (groupId: string) => Promise<void>;
   onOpenJoinModal?: () => void;
+  onOpenInviteModal?: () => void;
 }
 
 export function GroupModal({
@@ -52,12 +55,15 @@ export function GroupModal({
   initialTab = 'members',
   onCreateGroup,
   onDeleteGroup,
-  onOpenJoinModal
+  onOpenJoinModal,
+  onOpenInviteModal
 }: GroupModalProps) {
   const { user, signInWithGoogle } = useAuth();
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedUpiId, setCopiedUpiId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupType, setNewGroupType] = useState<'budget' | 'split'>('budget');
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [activeTab, setActiveTab] = useState<'members' | 'groups' | 'create'>(initialTab);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -142,21 +148,22 @@ export function GroupModal({
 
   const handleCreateGroupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanName = newGroupName.trim();
+    const cleanName = newGroupName.trim().slice(0, 35);
     if (!cleanName) return;
 
     setIsCreatingGroup(true);
     try {
       if (onCreateGroup) {
-        const created = await onCreateGroup(cleanName);
+        const created = await onCreateGroup(cleanName, newGroupType);
         if (created) {
           onSelectGroup(created.id);
         }
       } else if (user) {
-        const created = await createGroup(cleanName, user);
+        const created = await createGroup(cleanName, user, newGroupType);
         onSelectGroup(created.id);
       }
       setNewGroupName('');
+      setNewGroupType('budget');
       showToast(`Ledger "${cleanName}" created!`);
       setActiveTab('members');
     } catch (err: any) {
@@ -166,40 +173,51 @@ export function GroupModal({
     }
   };
 
-  const copyInviteCode = () => {
-    if (!activeGroup?.inviteCode) return;
-    navigator.clipboard.writeText(activeGroup.inviteCode);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
-    showToast('Invite code copied to clipboard!');
+  const copyInviteCode = async () => {
+    if (!activeGroup) return;
+    const ok = await copyGroupInviteCode(activeGroup, showToast);
+    if (ok) {
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    }
   };
 
   const copyInviteLink = async () => {
     if (!activeGroup) return;
-    const url = `${window.location.origin}${window.location.pathname}?joinCode=${activeGroup.inviteCode || activeGroup.id}`;
-    
-    // On iOS, Android, and mobile PWAs, invoke the native Share Sheet (Apple AirDrop, WhatsApp, SMS, etc.)
-    if (typeof navigator !== 'undefined' && navigator.share) {
-      try {
-        await navigator.share({
-          title: `Join "${activeGroup.name}" on Hisaab Barabar`,
-          text: `Join my shared ledger "${activeGroup.name}" on Hisaab Barabar to track expenses and shopping items!`,
-          url: url
-        });
-        showToast('Invite link shared!');
-        return;
-      } catch (err: any) {
-        if (err.name === 'AbortError') return; // User simply closed the native share sheet
-      }
-    }
-
-    try {
-      await navigator.clipboard.writeText(url);
+    const result = await shareGroupInviteLink(activeGroup, showToast);
+    if (result.copied) {
       setCopiedLink(true);
       setTimeout(() => setCopiedLink(false), 2000);
-      showToast('Invite link copied to clipboard!');
+    }
+  };
+
+  const handleCopyUpi = async (upiId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(upiId);
+      setCopiedUpiId(upiId);
+      showToast(`UPI ID copied: ${upiId}`);
+      setTimeout(() => {
+        setCopiedUpiId((curr) => (curr === upiId ? null : curr));
+      }, 2000);
     } catch {
-      showToast('Invite link: ' + url);
+      const textarea = document.createElement('textarea');
+      textarea.value = upiId;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        setCopiedUpiId(upiId);
+        showToast(`UPI ID copied: ${upiId}`);
+        setTimeout(() => {
+          setCopiedUpiId((curr) => (curr === upiId ? null : curr));
+        }, 2000);
+      } catch {
+        showToast('Failed to copy UPI ID');
+      }
+      document.body.removeChild(textarea);
     }
   };
 
@@ -333,7 +351,7 @@ export function GroupModal({
                     <div className="flex items-start gap-2.5 text-text-primary">
                       <Share2 size={15} className="text-google-blue shrink-0 mt-0.5" />
                       <div className="text-text-secondary leading-snug">
-                        <span className="font-semibold text-text-primary">Direct Invite Links:</span> Share 6-digit codes or instant links for effortless joining.
+                        <span className="font-semibold text-text-primary">Direct Invite Links:</span> Share 8-character codes or instant links for effortless joining.
                       </div>
                     </div>
                     <div className="flex items-start gap-2.5 text-text-primary">
@@ -402,7 +420,9 @@ export function GroupModal({
                         </div>
 
                         <p className="text-xs text-text-secondary leading-relaxed">
-                          Share this invite link with family, friends, or roommates. New members join with View Only access by default; admins can grant Can Edit access anytime below.
+                          {activeGroup?.type === 'split'
+                            ? 'Share this invite link or code with your friends or roommates to split expenses and settle balances together.'
+                            : 'Share this invite link with family, friends, or roommates. New members join with View Only access by default; admins can grant Can Edit access anytime below.'}
                         </p>
 
                         {/* Primary & Secondary Action CTAs (Apple HIG / Material 3) */}
@@ -489,9 +509,40 @@ export function GroupModal({
                             <div className="font-semibold text-text-primary truncate">
                               {member.displayName || member.email}
                             </div>
-                            <div className="text-xs text-text-secondary truncate">
-                              {member.email}
-                            </div>
+                            {member.email && (
+                              <div className="text-xs text-text-secondary truncate">
+                                {member.email}
+                              </div>
+                            )}
+                            {member.upiId && (
+                              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                                <span className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary select-none">UPI:</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleCopyUpi(member.upiId!, e)}
+                                  title="Click to copy UPI ID"
+                                  aria-label={`Copy UPI ID ${member.upiId}`}
+                                  className={`group/upi inline-flex items-center gap-1.5 font-mono text-[11px] font-medium px-2 py-0.5 rounded-md border transition-all cursor-pointer select-none active:scale-95 ${
+                                    copiedUpiId === member.upiId
+                                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                                      : 'bg-surface-hover hover:bg-surface-active border-border text-text-primary hover:border-google-blue/40'
+                                  }`}
+                                >
+                                  <span>{member.upiId}</span>
+                                  {copiedUpiId === member.upiId ? (
+                                    <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold font-sans text-emerald-600 dark:text-emerald-400 animate-in fade-in zoom-in-95 duration-150">
+                                      <Check size={11} strokeWidth={2.5} />
+                                      <span>Copied</span>
+                                    </span>
+                                  ) : (
+                                    <Copy 
+                                      size={11} 
+                                      className="text-text-secondary group-hover/upi:text-google-blue transition-colors shrink-0" 
+                                    />
+                                  )}
+                                </button>
+                              </div>
+                            )}
                             {(member.joinedVia || member.addedAt) && (
                               <div className="text-[10px] text-text-secondary mt-0.5 flex items-center gap-1.5 flex-wrap">
                                 {member.joinedVia && (
@@ -517,9 +568,9 @@ export function GroupModal({
                         </div>
 
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {/* Role Pill - Interactive for group admin */}
+                          {/* Role Pill - High contrast for both light and dark modes */}
                           {memberIsOwner ? (
-                            <span className="text-xs uppercase font-semibold px-2.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/60 text-purple-900 dark:text-purple-200 border border-purple-300/80 dark:border-purple-800">
+                            <span className="text-xs uppercase font-semibold px-2.5 py-0.5 rounded-full bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/30">
                               Admin
                             </span>
                           ) : isOwner ? (
@@ -529,8 +580,8 @@ export function GroupModal({
                               title="Click to switch between Can Edit and View Only"
                               className={`text-xs uppercase font-semibold px-2.5 py-1 rounded-full border transition-all cursor-pointer flex items-center gap-1 ${
                                 member.role === 'editor'
-                                  ? 'bg-blue-100 dark:bg-blue-950/60 border-blue-300/80 dark:border-blue-800 text-blue-950 dark:text-blue-200 hover:bg-blue-200/80 dark:hover:bg-blue-900/60'
-                                  : 'bg-amber-100 dark:bg-amber-950/60 border-amber-300/80 dark:border-amber-800 text-amber-950 dark:text-amber-200 hover:bg-amber-200/80 dark:hover:bg-amber-900/60'
+                                  ? 'bg-google-blue/10 border-google-blue/30 text-google-blue dark:text-blue-300 hover:bg-google-blue/20'
+                                  : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20'
                               }`}
                             >
                               {member.role === 'editor' ? <Edit3 size={11} /> : <Eye size={11} />}
@@ -539,8 +590,8 @@ export function GroupModal({
                           ) : (
                             <span className={`text-xs uppercase font-semibold px-2.5 py-0.5 rounded-full border ${
                               member.role === 'editor'
-                                ? 'bg-blue-100 dark:bg-blue-950/60 border-blue-300/80 dark:border-blue-800 text-blue-950 dark:text-blue-200'
-                                : 'bg-amber-100 dark:bg-amber-950/60 border-amber-300/80 dark:border-amber-800 text-amber-950 dark:text-amber-200'
+                                ? 'bg-google-blue/10 border-google-blue/30 text-google-blue dark:text-blue-300'
+                                : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300'
                             }`}>
                               {member.role === 'editor' ? 'Can Edit' : 'View Only'}
                             </span>
@@ -642,17 +693,23 @@ export function GroupModal({
                       }`}
                     >
                       <div className="min-w-0 pr-2">
-                        <div className="text-sm sm:text-base font-semibold text-text-primary truncate">
-                          {grp.name}
+                        <div className="text-sm sm:text-base font-semibold text-text-primary truncate flex items-center gap-2">
+                          <span className="truncate">{grp.name}</span>
+                          {grp.type === 'split' && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-google-blue/10 text-google-blue border border-google-blue/20 shrink-0">
+                              Split
+                            </span>
+                          )}
                         </div>
-                        <div className="text-xs text-text-secondary mt-0.5 flex items-center gap-1.5 flex-wrap">
-                          <span>{grp.memberEmails?.length || 1} member{grp.memberEmails?.length === 1 ? '' : 's'}</span>
+                        <div className="text-xs text-text-secondary mt-0.5 flex items-center gap-1.5 truncate">
+                          <span>{grp.memberEmails?.length || 1} {grp.memberEmails?.length === 1 ? 'member' : 'members'}</span>
                           <span>·</span>
                           <span>Code: <span className="font-mono">{grp.inviteCode || 'N/A'}</span></span>
                           {isGrpOwner && (
-                            <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-surface-hover text-text-secondary">
-                              Admin
-                            </span>
+                            <>
+                              <span>·</span>
+                              <span>Admin</span>
+                            </>
                           )}
                         </div>
                       </div>
@@ -714,67 +771,83 @@ export function GroupModal({
           {/* TAB 3: CREATE NEW LEDGER / GROUP */}
           {activeTab === 'create' && (
             <div className="space-y-4">
-              {!user ? (
-                <div className="py-6 px-4 sm:px-6 rounded-3xl bg-surface-hover/40 border border-border text-center space-y-4 font-sans">
-                  <div className="w-12 h-12 rounded-2xl bg-google-blue/10 text-google-blue flex items-center justify-center mx-auto">
-                    <FolderPlus size={22} strokeWidth={2.2} />
-                  </div>
-
-                  <div className="space-y-1.5 max-w-sm mx-auto">
-                    <h3 className="text-base font-semibold text-text-primary">
-                      Sign in to Create Shared Ledgers
-                    </h3>
-                    <p className="text-xs text-text-secondary leading-relaxed">
-                      Shared ledgers are securely stored in the cloud so you can invite members, sync balances, and collaborate on shopping lists.
+              {!user && (
+                <div className="p-3.5 rounded-2xl bg-surface-hover/60 border border-border flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
+                      <FolderPlus size={14} className="text-google-blue shrink-0" />
+                      <span>Local Device Mode</span>
+                    </div>
+                    <p className="text-[11px] text-text-secondary mt-0.5 leading-snug">
+                      Ledgers created now are stored on this device. Sign in anytime to sync across devices and invite friends.
                     </p>
                   </div>
-
-                  <div className="pt-1 max-w-sm mx-auto">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await signInWithGoogle();
-                        } catch {
-                          // Handled in AuthContext
-                        }
-                      }}
-                      className="w-full h-11 rounded-full bg-surface hover:bg-surface-hover border border-border shadow-xs hover:border-text-secondary/40 text-xs sm:text-sm font-medium text-text-primary flex items-center justify-center gap-2.5 transition-all cursor-pointer active:scale-95 select-none"
-                    >
-                      <GoogleIcon className="w-4 h-4 shrink-0" />
-                      <span>Sign in with Google</span>
-                    </button>
-                    <p className="text-xs text-text-secondary mt-2">
-                      Secure authentication via your Google account
-                    </p>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await signInWithGoogle();
+                      } catch {}
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-surface hover:bg-surface-hover border border-border text-xs font-semibold text-text-primary flex items-center gap-1.5 shrink-0 shadow-2xs transition-colors cursor-pointer"
+                  >
+                    <GoogleIcon className="w-3.5 h-3.5 shrink-0" />
+                    <span>Sign in</span>
+                  </button>
                 </div>
-              ) : (
-                <>
-                  <div className="p-4 rounded-2xl bg-surface-hover/50 border border-border">
-                    <div className="w-10 h-10 rounded-2xl bg-google-blue/10 text-google-blue flex items-center justify-center mb-3">
-                      <FolderPlus size={20} />
-                    </div>
-                    <div className="text-sm sm:text-base font-semibold text-text-primary">
-                      Create a New Expense Ledger
-                    </div>
-                    <div className="text-xs sm:text-sm text-text-secondary mt-1">
-                      Separate your personal bills, trip expenses, or shared apartment finances with distinct ledgers.
-                    </div>
-                  </div>
+              )}
 
-                  <form onSubmit={handleCreateGroupSubmit} className="space-y-3">
+                  <form onSubmit={handleCreateGroupSubmit} className="space-y-4">
+                    {/* Clean Segmented Control: Budget vs Split */}
                     <div>
                       <label className="text-xs font-semibold text-text-secondary uppercase tracking-wider block mb-1.5">
-                        Ledger / Group Name
+                        Ledger Type
                       </label>
+                      <div className="flex p-1 rounded-2xl bg-surface-hover border border-border text-xs sm:text-sm">
+                        <button
+                          type="button"
+                          onClick={() => setNewGroupType('budget')}
+                          className={`flex-1 py-2 px-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                            newGroupType === 'budget'
+                              ? 'bg-surface text-text-primary shadow-xs font-semibold'
+                              : 'text-text-secondary hover:text-text-primary'
+                          }`}
+                        >
+                          <Wallet size={15} />
+                          <span>Expense Tracker</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewGroupType('split')}
+                          className={`flex-1 py-2 px-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                            newGroupType === 'split'
+                              ? 'bg-surface text-text-primary shadow-xs font-semibold'
+                              : 'text-text-secondary hover:text-text-primary'
+                          }`}
+                        >
+                          <Users size={15} />
+                          <span>Split Expenses</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+                          Ledger Name
+                        </label>
+                        <span className={`text-[11px] font-mono ${newGroupName.length >= 30 ? 'text-amber-500 font-semibold' : 'text-text-secondary'}`}>
+                          {newGroupName.length}/35
+                        </span>
+                      </div>
                       <input
                         type="text"
                         required
                         autoFocus
+                        maxLength={35}
                         value={newGroupName}
                         onChange={(e) => setNewGroupName(e.target.value)}
-                        placeholder="e.g. Goa Trip 2026, Flat 402, Personal..."
+                        placeholder={newGroupType === 'split' ? 'e.g. Goa Trip 2026, Flatmates 402...' : 'e.g. Household Budget, Personal Finances...'}
                         className="w-full px-3.5 py-2.5 rounded-2xl bg-surface border border-border text-base sm:text-sm text-text-primary outline-none focus:border-google-blue transition-all"
                       />
                     </div>
@@ -798,8 +871,6 @@ export function GroupModal({
                       </button>
                     </div>
                   </form>
-                </>
-              )}
             </div>
           )}
         </div>

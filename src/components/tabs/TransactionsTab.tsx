@@ -20,6 +20,8 @@ import type { Transaction, CategoryData, UserRole } from '../../types';
 import { ICON_MAP } from '../modals/CategoryModal';
 import { createPortal } from 'react-dom';
 import { TransactionActionSheet } from '../modals/TransactionActionSheet';
+import { useAuth } from '../../context/AuthContext';
+import { formatSettlementDisplayTitle } from '../../services/splitService';
 
 interface TransactionsTabProps {
   transactions: Transaction[];
@@ -93,6 +95,7 @@ export function TransactionsTab({
   onUndoSettleExpense,
   groupName
 }: TransactionsTabProps) {
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedStatus, setSelectedStatus] = useState<'all' | 'active' | 'settled'>('all');
@@ -500,7 +503,7 @@ export function TransactionsTab({
 
             {selectedStatus !== 'all' && (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-google-blue/10 text-google-blue text-xs font-medium capitalize">
-                {selectedStatus} only
+                {selectedStatus === 'settled' ? 'Refunded only' : `${selectedStatus} only`}
                 <button
                   type="button"
                   onClick={() => setSelectedStatus('all')}
@@ -664,11 +667,13 @@ export function TransactionsTab({
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-sm font-medium text-text-primary truncate">
-                                      {tx.name}
+                                      {tx.isSettlement 
+                                        ? `Settlement: ${formatSettlementDisplayTitle(tx, undefined, user?.uid, user?.email || undefined)}` 
+                                        : tx.name}
                                     </span>
                                     {tx.settled && (
                                       <span className="text-[11px] font-semibold text-google-blue dark:text-blue-400 bg-google-blue/10 px-1.5 py-0.2 rounded whitespace-nowrap">
-                                        Settled
+                                        Refunded
                                       </span>
                                     )}
                                   </div>
@@ -705,21 +710,22 @@ export function TransactionsTab({
                                   <>
                                     {/* Desktop: Direct inline action buttons */}
                                     <div className="hidden sm:flex items-center gap-1 sm:gap-1.5 shrink-0">
-                                      {/* Settle / Undo Button */}
+                                      {/* Refund / Undo Button */}
                                       <div className="w-[60px] sm:w-[68px] flex justify-end">
                                         {!tx.settled ? (
                                           <button
                                             type="button"
                                             onClick={() => onSettleExpense(tx)}
                                             className="h-8 px-2.5 rounded-lg bg-google-blue/10 hover:bg-google-blue/20 text-google-blue dark:text-blue-400 text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center whitespace-nowrap active:scale-95"
+                                            title="Refund expense"
                                           >
-                                            Settle
+                                            Refund
                                           </button>
                                         ) : (
                                           <button
                                             type="button"
                                             onClick={() => onUndoSettleExpense(tx)}
-                                            title="Undo settlement"
+                                            title="Undo refund / restore original amount"
                                             className="h-8 px-2.5 rounded-lg bg-surface-hover hover:bg-surface-active text-text-secondary hover:text-google-blue text-xs font-medium transition-colors cursor-pointer flex items-center justify-center gap-1 whitespace-nowrap active:scale-95"
                                           >
                                             <RotateCcw size={12} />
@@ -1110,7 +1116,7 @@ export function TransactionsTab({
                         : 'text-text-secondary hover:text-text-primary'
                     }`}
                   >
-                    {st}
+                    {st === 'all' ? 'All' : st === 'active' ? 'Active' : 'Refunded'}
                   </button>
                 ))}
               </div>
@@ -1147,7 +1153,7 @@ export function TransactionsTab({
         categories={categories}
         onEditExpense={onEditExpense}
         onDeleteExpense={onDeleteExpense}
-        onSettleExpense={onSettleExpense}
+        onRefundExpense={onSettleExpense}
         onUndoSettleExpense={onUndoSettleExpense}
       />
 

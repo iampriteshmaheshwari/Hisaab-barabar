@@ -31,10 +31,16 @@ interface ShoppingTabProps {
 }
 
 const DEFAULT_CATEGORIES: Record<string, CategoryData> = {
-  groceries: { name: 'Groceries', hex: '#1a73e8', iconName: 'ShoppingCart' },
-  utilities: { name: 'Utilities', hex: '#F4B400', iconName: 'Zap' },
-  investments: { name: 'Investments', hex: '#4285F4', iconName: 'TrendingUp' },
-  other: { name: 'Other', hex: '#AB47BC', iconName: 'Tag' }
+  groceries: { name: 'Groceries', hex: '#059669', color: '#059669', bg: '#05966914', iconName: 'ShoppingCart' },
+  food: { name: 'Food & Dining', hex: '#EA580C', color: '#EA580C', bg: '#EA580C14', iconName: 'Utensils' },
+  utilities: { name: 'Bills & Recharge', hex: '#D97706', color: '#D97706', bg: '#D9770614', iconName: 'Zap' },
+  rent: { name: 'Home & Rent', hex: '#0D9488', color: '#0D9488', bg: '#0D948814', iconName: 'Home' },
+  travel: { name: 'Travel & Petrol', hex: '#0284C7', color: '#0284C7', bg: '#0284C714', iconName: 'Car' },
+  medical: { name: 'Health & Medicine', hex: '#DC2626', color: '#DC2626', bg: '#DC262614', iconName: 'HeartPulse' },
+  shopping: { name: 'Shopping', hex: '#7C3AED', color: '#7C3AED', bg: '#7C3AED14', iconName: 'ShoppingBag' },
+  education: { name: 'Education', hex: '#4F46E5', color: '#4F46E5', bg: '#4F46E514', iconName: 'BookOpen' },
+  investments: { name: 'Investments & Loans', hex: '#2563EB', color: '#2563EB', bg: '#2563EB14', iconName: 'TrendingUp' },
+  other: { name: 'Other', hex: '#64748B', color: '#64748B', bg: '#64748B14', iconName: 'Tag' }
 };
 
 export function ShoppingTab({

@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation blueprint for Shared Living (Flat & Hostel) Split & Settle feature in HisaabBarabar. Covers pure Net Balances financial model, dual ledger modes (Family vs Flat/Hostel), debtor-centric private reminders, double-confirmation delete protection, virtual member onboarding, UPI/mobile settlement rails, and Firestore real-time synchronization.",
+  "updatedAt":  "2026-10-11T14:53:05.797564714Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

@@ -84,6 +84,11 @@ service cloud.firestore {
         data.message is string && data.message.size() <= 500;
     }
 
+    // Connectivity test validation
+    match /test/{testId} {
+      allow read: if true;
+    }
+
     // User profiles
     match /users/{userId} {
       allow read: if isOwner(userId);
@@ -148,6 +153,11 @@ service cloud.firestore {
 
       // Subcollection: Notifications
       match /notifications/{notificationId} {
+        allow read, create, update, delete: if isGroupMember(groupId);
+      }
+
+      // Subcollection: Settlements
+      match /settlements/{settlementId} {
         allow read, create, update, delete: if isGroupMember(groupId);
       }
     }

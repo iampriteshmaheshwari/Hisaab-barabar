@@ -9,6 +9,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import type { Transaction, CategoryData } from '../../types';
+import { formatTimeAgo } from '../../services/splitService';
 
 export interface TransactionActionMenuProps {
   isOpen: boolean;
@@ -16,10 +17,11 @@ export interface TransactionActionMenuProps {
   transaction: Transaction | null;
   anchorRect?: DOMRect | null;
   categories?: Record<string, CategoryData>;
+  isSplitGroup?: boolean;
   onEditExpense: (tx: Transaction) => void;
   onDeleteExpense?: (txId: string) => void;
-  onSettleExpense: (tx: Transaction) => void;
-  onUndoSettleExpense: (tx: Transaction) => void;
+  onRefundExpense?: (tx: Transaction) => void;
+  onUndoSettleExpense?: (tx: Transaction) => void;
 }
 
 export function TransactionActionSheet({
@@ -28,10 +30,11 @@ export function TransactionActionSheet({
   transaction,
   anchorRect,
   categories,
+  isSplitGroup = false,
   onEditExpense,
   onDeleteExpense,
-  onSettleExpense,
-  onUndoSettleExpense
+  onRefundExpense,
+  onUndoSettleExpense,
 }: TransactionActionMenuProps) {
   // Local state for delete confirmation dialog
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -75,9 +78,17 @@ export function TransactionActionSheet({
     name: transaction.category || 'Expense' 
   };
 
+  const isSplit = Boolean(
+    isSplitGroup || 
+    transaction.splitMode || 
+    (transaction.splitMembers && transaction.splitMembers.length > 0) ||
+    transaction.groupId?.includes('split')
+  );
+
   // Compute native-style dropdown coordinates anchored directly at the 3-dots button
-  const menuWidth = 224; // px (w-56)
-  const estimatedHeight = onDeleteExpense ? 186 : 142; // px
+  const menuWidth = 240; // px (w-60)
+  const hasRefundAction = !isSplit && Boolean((onRefundExpense && !transaction.settled && !transaction.isSettlement) || (onUndoSettleExpense && (transaction.settled || transaction.note?.toLowerCase().trim() === 'settled') && !transaction.isSettlement));
+  const estimatedHeight = 110 + (onDeleteExpense ? 44 : 0) + (hasRefundAction ? 44 : 0) + (!transaction.isSettlement ? 44 : 0);
 
   let style: React.CSSProperties = {
     position: 'fixed',
@@ -149,8 +160,16 @@ export function TransactionActionSheet({
             onTouchEnd={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-red-500/10 text-google-red flex items-center justify-center shrink-0">
-                <AlertTriangle size={20} strokeWidth={2.2} />
+              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
+                transaction.isSettlement 
+                  ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' 
+                  : 'bg-red-500/10 text-google-red'
+              }`}>
+                {transaction.isSettlement ? (
+                  <RotateCcw size={20} strokeWidth={2.2} />
+                ) : (
+                  <AlertTriangle size={20} strokeWidth={2.2} />
+                )}
               </div>
               <button
                 type="button"
@@ -163,12 +182,28 @@ export function TransactionActionSheet({
               </button>
             </div>
 
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <h4 id="delete-dialog-title" className="text-sm sm:text-base font-semibold text-text-primary">
-                Delete Expense?
+                {transaction.isSettlement 
+                  ? 'Undo Settlement Payment?' 
+                  : transaction.settled || (transaction.settledMembers && transaction.settledMembers.length > 0)
+                    ? 'Delete Settled Expense?' 
+                    : 'Delete Expense?'}
               </h4>
               <p className="text-xs sm:text-sm text-text-secondary leading-relaxed">
-                Are you sure you want to delete <span className="font-semibold text-text-primary">"{transaction.name}"</span> (₹{transaction.amount.toLocaleString('en-IN')})? This cannot be undone.
+                {transaction.isSettlement ? (
+                  <>
+                    Are you sure you want to cancel the settlement of <span className="font-semibold text-text-primary">₹{transaction.amount.toLocaleString('en-IN')}</span>? This will re-open the debt between <span className="font-semibold text-text-primary">{transaction.paidByName || 'Payer'}</span> and <span className="font-semibold text-text-primary">{transaction.settledToName || 'Receiver'}</span>, and restore any cleared bills back to Open.
+                  </>
+                ) : transaction.settled || (transaction.settledMembers && transaction.settledMembers.length > 0) ? (
+                  <>
+                    Are you sure you want to delete <span className="font-semibold text-text-primary">"{transaction.name}"</span> (₹{transaction.amount.toLocaleString('en-IN')})? This expense was already settled by group members. Deleting it will recalculate all member dues and reopen balances.
+                  </>
+                ) : (
+                  <>
+                    Are you sure you want to delete <span className="font-semibold text-text-primary">"{transaction.name}"</span> (₹{transaction.amount.toLocaleString('en-IN')})? It will be moved to Recently Deleted and kept for 30 days.
+                  </>
+                )}
               </p>
             </div>
 
@@ -189,10 +224,23 @@ export function TransactionActionSheet({
                   setShowDeleteConfirm(false);
                   onClose();
                 }}
-                className="flex-1 h-9.5 rounded-xl bg-google-red hover:bg-red-700 text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
+                className={`flex-1 h-9.5 rounded-xl text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-xs ${
+                  transaction.isSettlement 
+                    ? 'bg-amber-600 hover:bg-amber-700' 
+                    : 'bg-google-red hover:bg-red-700'
+                }`}
               >
-                <Trash2 size={14} strokeWidth={2} />
-                <span>Delete</span>
+                {transaction.isSettlement ? (
+                  <>
+                    <RotateCcw size={14} strokeWidth={2} />
+                    <span>Undo Settlement</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={14} strokeWidth={2} />
+                    <span>Delete</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -201,7 +249,7 @@ export function TransactionActionSheet({
         /* Anchored Context Menu (Apple iOS UIMenu & Google Material 3 Popup) */
         <div
           style={style}
-          className="w-56 bg-surface/98 dark:bg-surface/95 backdrop-blur-xl border border-border shadow-2xl rounded-2xl p-1.5 text-left font-sans animate-in fade-in zoom-in-95 duration-150 ring-1 ring-black/5 dark:ring-white/10"
+          className="w-60 bg-surface/98 dark:bg-surface/95 backdrop-blur-xl border border-border shadow-2xl rounded-2xl p-1.5 text-left font-sans animate-in fade-in zoom-in-95 duration-150 ring-1 ring-black/5 dark:ring-white/10"
           role="menu"
           aria-orientation="vertical"
           onClick={(e) => e.stopPropagation()}
@@ -221,15 +269,24 @@ export function TransactionActionSheet({
                 <span className="font-semibold font-mono text-text-primary">
                   ₹{transaction.amount.toLocaleString('en-IN')}
                 </span>
-                {transaction.settled && (
+                {transaction.settled && !isSplit && (
                   <>
                     <span className="text-text-secondary/40">·</span>
-                    <span className="text-[10px] font-semibold text-google-blue">
-                      Settled
+                    <span className="text-[10px] font-semibold text-google-blue dark:text-blue-400">
+                      Refunded
                     </span>
                   </>
                 )}
               </div>
+              {transaction.lastEditedByName && (
+                <div className="text-[10px] text-text-secondary/80 flex items-center gap-1 mt-1 truncate">
+                  <Pencil size={9} className="shrink-0 text-text-secondary/60" />
+                  <span>
+                    Edited by {transaction.lastEditedByName}
+                    {transaction.lastEditedAt ? ` · ${formatTimeAgo(transaction.lastEditedAt)}` : ''}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Cross Symbol to close the menu */}
@@ -249,48 +306,62 @@ export function TransactionActionSheet({
 
           {/* Action Items */}
           <div className="space-y-0.5">
-            {/* Settle / Undo Settle */}
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                if (transaction.settled) {
-                  onUndoSettleExpense(transaction);
-                } else {
-                  onSettleExpense(transaction);
-                }
-                onClose();
-              }}
-              className="w-full h-9.5 px-2.5 rounded-xl flex items-center gap-2.5 text-xs sm:text-sm font-medium text-text-primary hover:bg-surface-hover hover:text-google-blue active:bg-surface-active transition-colors cursor-pointer select-none"
-            >
-              <div className="w-5 h-5 flex items-center justify-center shrink-0">
-                {transaction.settled ? (
-                  <RotateCcw size={15} className="text-google-blue shrink-0" />
-                ) : (
-                  <CheckCircle2 size={15} className="text-google-blue shrink-0" />
-                )}
-              </div>
-              <span>{transaction.settled ? 'Undo Settle' : 'Settle'}</span>
-            </button>
+            {/* Refund Expense (strictly for personal/budget expense tracker entries, never split ledgers) */}
+            {!isSplit && onRefundExpense && !transaction.settled && !transaction.isSettlement && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onRefundExpense(transaction);
+                  onClose();
+                }}
+                className="w-full h-9.5 px-2.5 rounded-xl flex items-center gap-2.5 text-xs sm:text-sm font-medium text-text-primary hover:bg-surface-hover active:bg-surface-active transition-colors cursor-pointer select-none text-left"
+              >
+                <div className="w-5 h-5 flex items-center justify-center shrink-0">
+                  <RotateCcw size={15} className="text-text-secondary shrink-0" />
+                </div>
+                <span className="truncate whitespace-nowrap">Refunded / Returned</span>
+              </button>
+            )}
 
-            {/* Edit */}
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                onEditExpense(transaction);
-                onClose();
-              }}
-              className="w-full h-9.5 px-2.5 rounded-xl flex items-center gap-2.5 text-xs sm:text-sm font-medium text-text-primary hover:bg-surface-hover active:bg-surface-active transition-colors cursor-pointer select-none"
-            >
-              <div className="w-5 h-5 flex items-center justify-center shrink-0">
-                <Pencil size={15} className="text-text-secondary shrink-0" />
-              </div>
-              <span>Edit</span>
-            </button>
+            {/* Undo Refund (strictly for personal/budget expense tracker entries, never split ledgers) */}
+            {!isSplit && onUndoSettleExpense && (transaction.settled || transaction.note?.toLowerCase().trim() === 'settled') && !transaction.isSettlement && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onUndoSettleExpense(transaction);
+                  onClose();
+                }}
+                className="w-full h-9.5 px-2.5 rounded-xl flex items-center gap-2.5 text-xs sm:text-sm font-medium text-text-primary hover:bg-surface-hover active:bg-surface-active transition-colors cursor-pointer select-none text-left"
+              >
+                <div className="w-5 h-5 flex items-center justify-center shrink-0">
+                  <RotateCcw size={15} className="text-text-secondary shrink-0" />
+                </div>
+                <span className="truncate">Undo Refund</span>
+              </button>
+            )}
+
+            {/* Edit (only for real expenses, settlements cannot be edited as expenses) */}
+            {!transaction.isSettlement && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onEditExpense(transaction);
+                  onClose();
+                }}
+                className="w-full h-9.5 px-2.5 rounded-xl flex items-center gap-2.5 text-xs sm:text-sm font-medium text-text-primary hover:bg-surface-hover active:bg-surface-active transition-colors cursor-pointer select-none"
+              >
+                <div className="w-5 h-5 flex items-center justify-center shrink-0">
+                  <Pencil size={15} className="text-text-secondary shrink-0" />
+                </div>
+                <span>Edit</span>
+              </button>
+            )}
           </div>
 
-          {/* Delete (Opens Confirmation Modal) */}
+          {/* Delete / Undo Settlement */}
           {onDeleteExpense && (
             <>
               <div className="h-px bg-border/60 mx-1 my-1" />
@@ -300,12 +371,20 @@ export function TransactionActionSheet({
                 onClick={() => {
                   setShowDeleteConfirm(true);
                 }}
-                className="w-full h-9.5 px-2.5 rounded-xl flex items-center gap-2.5 text-xs sm:text-sm font-medium text-google-red hover:bg-red-500/10 active:bg-red-500/15 transition-colors cursor-pointer select-none"
+                className={`w-full h-9.5 px-2.5 rounded-xl flex items-center gap-2.5 text-xs sm:text-sm font-medium transition-colors cursor-pointer select-none ${
+                  transaction.isSettlement
+                    ? 'text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 active:bg-amber-500/15'
+                    : 'text-google-red hover:bg-red-500/10 active:bg-red-500/15'
+                }`}
               >
                 <div className="w-5 h-5 flex items-center justify-center shrink-0">
-                  <Trash2 size={15} className="shrink-0" />
+                  {transaction.isSettlement ? (
+                    <RotateCcw size={15} className="shrink-0" />
+                  ) : (
+                    <Trash2 size={15} className="shrink-0" />
+                  )}
                 </div>
-                <span>Delete</span>
+                <span>{transaction.isSettlement ? 'Undo Settlement' : 'Delete'}</span>
               </button>
             </>
           )}

@@ -3,7 +3,6 @@ import {
   Users, 
   ChevronDown, 
   LogOut, 
-  Check, 
   Share2,
   Wallet,
   Sun,
@@ -14,12 +13,13 @@ import {
   LogIn,
   Download,
   CloudUpload,
-  Video,
-  Briefcase
+  UserCog
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import type { ExpenseGroup, UserRole, ThemeMode, AppNotification } from '../types';
 import { NotificationCenter } from './notifications/NotificationCenter';
+import { GeminiIcon } from './icons/GeminiIcon';
+import { shareGroupInviteLink } from '../utils/shareUtils';
 
 interface NavbarProps {
   groups: ExpenseGroup[];
@@ -27,6 +27,7 @@ interface NavbarProps {
   userRole: UserRole;
   onOpenGroupModal: (initialTab?: 'members' | 'groups' | 'create') => void;
   onOpenJoinModal: () => void;
+  onOpenInviteModal?: () => void;
   onSelectGroup: (groupId: string) => void;
   isOnline: boolean;
   isSyncing?: boolean;
@@ -42,13 +43,13 @@ interface NavbarProps {
   onDeleteNotification?: (notificationId: string) => void;
   onSelectNotification?: (notification: AppNotification) => void;
   onTriggerTestDailyDigest?: () => void;
+  onTriggerTestSplitNotification?: () => void;
   pushPermission?: NotificationPermission | 'unsupported';
   onRequestPushPermission?: () => Promise<void>;
   digestTime?: string;
   isStandalone?: boolean;
   onOpenInstallModal?: () => void;
-  onOpenVideoModal?: () => void;
-  onOpenPortfolioModal?: () => void;
+  onShowToast?: (msg: string | { message: string; subMessage?: string; type?: 'info' | 'success' | 'warning' | 'error' }) => void;
 }
 
 interface GroupPopoverCoords {
@@ -74,6 +75,7 @@ export function Navbar({
   userRole,
   onOpenGroupModal,
   onOpenJoinModal,
+  onOpenInviteModal,
   onSelectGroup,
   isOnline,
   isSyncing = false,
@@ -89,13 +91,13 @@ export function Navbar({
   onDeleteNotification,
   onSelectNotification,
   onTriggerTestDailyDigest,
+  onTriggerTestSplitNotification,
   pushPermission = 'default',
   onRequestPushPermission,
   digestTime = '21:00',
   isStandalone = false,
   onOpenInstallModal,
-  onOpenVideoModal,
-  onOpenPortfolioModal
+  onShowToast
 }: NavbarProps) {
   const { user, signInWithGoogle, logOut } = useAuth();
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -107,15 +109,28 @@ export function Navbar({
   const groupMenuRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notificationMenuRef = useRef<HTMLDivElement>(null);
+  const activeGroupItemRef = useRef<HTMLButtonElement>(null);
 
   const currentUid = user?.uid || 'local_user';
   const unreadCount = notifications.filter(
     n => !n.readBy || !n.readBy.includes(currentUid)
   ).length;
 
+  // Auto-scroll to ensure active ledger is cleanly visible whenever group menu is opened
+  useEffect(() => {
+    if (showGroupMenu) {
+      const timer = setTimeout(() => {
+        if (activeGroupItemRef.current) {
+          activeGroupItemRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [showGroupMenu]);
+
   // Viewport & Safe-Margin Geometry Engine for Group Ledger Menu
   // On desktop and tablet (sm: 640px+), CSS absolute positioning handles anchoring cleanly and instantly without scripts.
-  // On mobile, bounds card inside [12px, window.innerWidth - 12px] with dynamic arrow tracking.
+  // On mobile, bounds card inside [12px, window.innerWidth - 12px] with proper anchor clearance.
   const computeGroupPosition = () => {
     if (!groupMenuRef.current) return;
     const rect = groupMenuRef.current.getBoundingClientRect();
@@ -127,9 +142,8 @@ export function Navbar({
     }
 
     const margin = 12; // 12px safe boundary from viewport edges
-    const idealWidth = 300;
+    const idealWidth = 320;
     const cardWidth = Math.min(idealWidth, vw - margin * 2);
-    const triggerCenter = rect.left + rect.width / 2;
 
     let cardLeft = rect.left;
 
@@ -142,16 +156,11 @@ export function Navbar({
       cardLeft = margin;
     }
 
-    // Dynamic arrow alignment targeting trigger's center
-    let arrowLeft = triggerCenter - cardLeft;
-    // Constrain arrow within the card's 16px corner radius
-    arrowLeft = Math.max(18, Math.min(cardWidth - 18, arrowLeft));
-
     setGroupCoords({
-      top: rect.bottom + 8,
+      top: rect.bottom + 6,
       left: cardLeft,
       width: cardWidth,
-      arrowLeft
+      arrowLeft: 0
     });
   };
 
@@ -258,29 +267,26 @@ export function Navbar({
       >
         <div className="max-w-3xl mx-auto px-3 sm:px-6 md:px-8 h-14 flex items-center justify-between gap-2 sm:gap-4">
           {/* Left: Brand Identity + Group Switcher */}
-          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-1">
-            <div className={`flex items-center gap-1.5 sm:gap-2 shrink-0 transition-opacity duration-200 ${isAnyMenuOpen ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
-              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-google-blue text-white flex items-center justify-center shadow-xs shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className={`flex items-center shrink-0 transition-opacity duration-200 ${isAnyMenuOpen ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-google-blue text-white flex items-center justify-center shadow-xs shrink-0" title="Hisaab Barabar">
                 <Wallet size={16} strokeWidth={2.2} />
               </div>
-              <span className="text-[13px] sm:text-base font-semibold tracking-tight text-text-primary select-none whitespace-nowrap hidden min-[370px]:inline">
-                Hisaab Barabar
-              </span>
             </div>
 
-            <div className={`h-4 w-[1px] bg-border mx-0.5 hidden min-[520px]:block shrink-0 transition-opacity duration-200 ${isAnyMenuOpen ? 'opacity-30' : 'opacity-100'}`} />
+            <div className={`h-4 w-[1px] bg-border mx-0.5 hidden min-[440px]:block shrink-0 transition-opacity duration-200 ${isAnyMenuOpen ? 'opacity-30' : 'opacity-100'}`} />
 
             {/* Group Switcher Button */}
             <div ref={groupMenuRef} className="relative min-w-0 max-w-full shrink">
               <button
                 type="button"
                 onClick={handleToggleGroupMenu}
-                className={`inline-flex items-center gap-1 sm:gap-1.5 h-8 px-2 sm:px-2.5 rounded-full border text-xs font-medium transition-all cursor-pointer select-none max-w-[125px] min-[390px]:max-w-[155px] sm:max-w-[200px] md:max-w-[240px] min-w-0 ${
+                className={`inline-flex items-center gap-1.5 sm:gap-2 h-8 px-2.5 sm:px-3 rounded-full text-xs font-medium transition-all cursor-pointer select-none max-w-[180px] min-[360px]:max-w-[210px] min-[400px]:max-w-[250px] sm:max-w-[320px] md:max-w-[360px] min-w-0 ${
                   showGroupMenu 
-                    ? 'relative z-50 bg-surface text-text-primary border-google-blue/60 ring-2 ring-google-blue/30 shadow-lg' 
+                    ? 'relative z-50 bg-surface text-google-blue border-google-blue/40 shadow-sm ring-2 ring-google-blue/20' 
                     : showUserMenu || showNotificationMenu
                     ? 'opacity-30 pointer-events-none border-transparent'
-                    : 'bg-surface-hover hover:bg-surface-active border-border text-text-primary'
+                    : 'bg-surface-hover/80 hover:bg-surface-hover border border-border text-text-primary hover:border-border/90 active:scale-98'
                 }`}
                 title={activeGroup ? activeGroup.name : 'Personal'}
               >
@@ -298,7 +304,7 @@ export function Navbar({
                   {activeGroup ? activeGroup.name : 'Personal'}
                 </span>
                 <ChevronDown 
-                  size={11} 
+                  size={12} 
                   className={`text-text-secondary shrink-0 transition-transform duration-200 ${showGroupMenu ? 'rotate-180 text-google-blue' : ''}`} 
                 />
               </button>
@@ -312,22 +318,12 @@ export function Navbar({
                     left: `${groupCoords.left}px`,
                     width: `${groupCoords.width}px`
                   } : undefined}
-                  className={`fixed sm:absolute sm:top-full sm:mt-2 sm:left-0 sm:right-auto sm:w-80 z-50 bg-surface rounded-2xl shadow-2xl border border-border text-text-primary p-2 overflow-visible font-sans ring-1 ring-black/5 dark:ring-white/10 ${
-                    !groupCoords ? 'top-[calc(3.5rem+env(safe-area-inset-top,0px))] left-3 w-[min(300px,calc(100vw-24px))] sm:left-0 sm:right-auto sm:w-80' : ''
+                  className={`fixed sm:absolute sm:top-full sm:mt-1.5 sm:left-0 sm:right-auto sm:w-80 z-50 bg-surface rounded-2xl shadow-xl border border-border text-text-primary p-2 overflow-hidden font-sans ring-1 ring-black/5 dark:ring-white/10 max-h-[min(540px,calc(100dvh-5rem))] flex flex-col ${
+                    !groupCoords ? 'top-[calc(3.5rem+env(safe-area-inset-top,0px))] left-3 w-[min(320px,calc(100vw-24px))] sm:left-0 sm:right-auto sm:w-80' : ''
                   }`}
                 >
-                  {/* Popover Arrow Indicator pointing up to the trigger in navbar */}
-                  <div 
-                    className="absolute -top-1.5 w-3.5 h-3.5 bg-surface border-t border-l border-border/90 rotate-45 z-20 pointer-events-none" 
-                    style={{
-                      left: groupCoords ? `${groupCoords.arrowLeft}px` : '24px',
-                      transform: 'translateX(-50%) rotate(45deg)'
-                    }}
-                    aria-hidden="true"
-                  />
-
-                  <div className="relative z-10">
-                    <div className="px-3 py-2 flex items-center justify-between text-xs font-semibold text-text-secondary border-b border-border mb-1">
+                  <div className="relative z-10 flex flex-col min-h-0">
+                    <div className="px-3 py-2 flex items-center justify-between text-xs font-semibold text-text-secondary border-b border-border/80 mb-1 shrink-0">
                       <span>Groups & Ledgers</span>
                       <button
                         type="button"
@@ -335,14 +331,14 @@ export function Navbar({
                           setShowGroupMenu(false);
                           onOpenGroupModal('create');
                         }}
-                        className="text-google-blue hover:text-google-blue-hover cursor-pointer font-medium flex items-center gap-1 text-xs"
+                        className="text-google-blue hover:text-google-blue-hover cursor-pointer font-medium flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md hover:bg-google-blue/10 transition-colors"
                       >
-                        <Plus size={13} />
+                        <Plus size={13} strokeWidth={2.2} />
                         <span>New</span>
                       </button>
                     </div>
 
-                    <div className="max-h-56 overflow-y-auto py-0.5 space-y-0.5 no-scrollbar">
+                    <div className="max-h-[min(340px,46vh)] overflow-y-auto overscroll-contain py-1 space-y-0.5 pr-1 pb-1 scrollbar-thin scrollbar-thumb-border hover:scrollbar-thumb-text-secondary/30 scrollbar-track-transparent">
                       {groups.map((grp) => {
                         const isActive = activeGroup?.id === grp.id;
                         const role = isActive ? userRole : getRoleForGroup(grp, user?.uid, user?.email);
@@ -356,38 +352,59 @@ export function Navbar({
                         return (
                           <button
                             key={grp.id}
+                            ref={isActive ? activeGroupItemRef : undefined}
                             type="button"
                             onClick={() => {
                               onSelectGroup(grp.id);
                               setShowGroupMenu(false);
                             }}
-                            className={`w-full text-left px-3 py-2.5 rounded-xl text-xs flex items-center justify-between gap-2 transition-colors cursor-pointer select-none ${
+                            className={`w-full text-left px-3 py-2 rounded-xl text-xs flex items-center justify-between gap-2.5 transition-colors cursor-pointer select-none ${
                               isActive 
-                                ? 'bg-google-blue/10 text-google-blue font-semibold' 
-                                : 'text-text-primary hover:bg-surface-hover'
+                                ? 'bg-google-blue/10 dark:bg-google-blue/15 text-google-blue font-semibold ring-1 ring-google-blue/20 shadow-xs' 
+                                : 'text-text-primary hover:bg-surface-hover active:bg-surface-active'
                             }`}
                           >
-                            <div className="flex items-center gap-2 min-w-0 flex-1">
-                              <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-google-blue' : 'bg-text-secondary/40'}`} />
-                              <span className="truncate">{grp.name}</span>
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                              {grp.type === 'split' ? (
+                                <Users
+                                  size={15}
+                                  className={`shrink-0 transition-colors ${
+                                    isActive ? 'text-google-blue' : 'text-text-secondary/80'
+                                  }`}
+                                  fill={isActive ? 'currentColor' : 'none'}
+                                  strokeWidth={isActive ? 2.2 : 1.75}
+                                />
+                              ) : (
+                                <Wallet
+                                  size={15}
+                                  className={`shrink-0 transition-colors ${
+                                    isActive ? 'text-google-blue' : 'text-text-secondary/80'
+                                  }`}
+                                  fill={isActive ? 'currentColor' : 'none'}
+                                  strokeWidth={isActive ? 2.2 : 1.75}
+                                />
+                              )}
+                              <span className={`truncate text-xs ${isActive ? 'font-semibold text-google-blue' : 'font-medium text-text-primary'}`}>
+                                {grp.name}
+                              </span>
                             </div>
 
                             <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 tracking-tight ${roleClass}`}>
+                              {grp.type === 'split' && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded text-google-blue bg-google-blue/10 border border-google-blue/20 shrink-0 leading-none">
+                                  Split
+                                </span>
+                              )}
+                              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 tracking-tight min-w-[58px] text-center leading-none ${roleClass}`}>
                                 {roleLabel}
                               </span>
-                              {isActive ? (
-                                <Check size={14} className="shrink-0 text-google-blue" />
-                              ) : (
-                                <span className="w-3.5 shrink-0" aria-hidden="true" />
-                              )}
                             </div>
                           </button>
                         );
                       })}
                     </div>
 
-                    <div className="border-t border-border mt-1 pt-1.5 space-y-0.5">
+                    <div className="border-t border-border/80 mt-1 pt-1.5 space-y-0.5">
                       <button
                         type="button"
                         onClick={() => {
@@ -407,9 +424,28 @@ export function Navbar({
                         }}
                         className="w-full text-left px-3 py-2 text-xs text-text-primary hover:bg-surface-hover rounded-xl transition-colors flex items-center gap-2.5 cursor-pointer font-medium"
                       >
-                        <Users size={14} className="text-text-secondary shrink-0" />
+                        <UserCog size={14} className="text-text-secondary shrink-0" />
                         <span>Manage Group & Members</span>
                       </button>
+                      {activeGroup && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setShowGroupMenu(false);
+                            const notifyFn = (msg: string) => {
+                              if (onShowToast) {
+                                onShowToast({ message: msg, type: 'info' });
+                              }
+                            };
+                            await shareGroupInviteLink(activeGroup, notifyFn);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs text-text-primary hover:bg-surface-hover rounded-xl transition-colors flex items-center gap-2.5 cursor-pointer font-medium"
+                          title={`Share ${activeGroup.name} invite link`}
+                        >
+                          <Share2 size={14} className="text-text-secondary shrink-0" />
+                          <span className="truncate">Share "{activeGroup.name}"</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -457,37 +493,8 @@ export function Navbar({
             ) : null}
           </div>
 
-        {/* Right: Video Tour + Portfolio + Theme Toggle + Notifications + Authentic Google Account Profile */}
+        {/* Right: Notifications + Theme Toggle + Authentic Google Account Profile */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {onOpenVideoModal && (
-            <button
-              type="button"
-              onClick={onOpenVideoModal}
-              className={`h-8 px-2 sm:px-2.5 rounded-full shrink-0 flex items-center gap-1.5 text-text-secondary hover:text-google-blue hover:bg-google-blue/10 active:scale-95 transition-all cursor-pointer border border-border/40 hover:border-google-blue/30 text-xs font-semibold ${
-                isAnyMenuOpen ? 'opacity-30 pointer-events-none' : 'opacity-100'
-              }`}
-              title="Watch Product Video Walkthrough & Record Demo"
-              aria-label="Video Walkthrough"
-            >
-              <Video size={14} className="text-google-blue shrink-0" />
-              <span className="hidden sm:inline">Demo Video</span>
-            </button>
-          )}
-
-          {onOpenPortfolioModal && (
-            <button
-              type="button"
-              onClick={onOpenPortfolioModal}
-              className={`h-8 px-2 sm:px-2.5 rounded-full shrink-0 flex items-center gap-1.5 text-text-secondary hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-500/10 active:scale-95 transition-all cursor-pointer border border-border/40 hover:border-emerald-500/30 text-xs font-semibold ${
-                isAnyMenuOpen ? 'opacity-30 pointer-events-none' : 'opacity-100'
-              }`}
-              title="HR & Recruiter Portfolio Case Study"
-              aria-label="HR Portfolio"
-            >
-              <Briefcase size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span className="hidden md:inline">HR Portfolio</span>
-            </button>
-          )}
 
           {/* Notification Bell with Badge & Popover */}
           <div ref={notificationMenuRef} className="relative shrink-0">
@@ -526,6 +533,7 @@ export function Navbar({
                 notifications={notifications}
                 currentUserId={currentUid}
                 digestTime={digestTime}
+                groupType={activeGroup?.type || 'budget'}
                 onClose={() => setShowNotificationMenu(false)}
                 onMarkRead={(id) => onMarkReadNotification && onMarkReadNotification(id)}
                 onMarkAllRead={() => onMarkAllNotificationsRead && onMarkAllNotificationsRead()}
@@ -536,6 +544,7 @@ export function Navbar({
                   if (onSelectNotification) onSelectNotification(notif);
                 }}
                 onTriggerTestDailyDigest={() => onTriggerTestDailyDigest && onTriggerTestDailyDigest()}
+                onTriggerTestSplitNotification={onTriggerTestSplitNotification}
                 pushPermission={pushPermission}
                 onRequestPushPermission={async () => {
                   if (onRequestPushPermission) await onRequestPushPermission();
@@ -667,33 +676,7 @@ export function Navbar({
                       <span>Group Members & Roles</span>
                     </button>
 
-                    {onOpenVideoModal && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowUserMenu(false);
-                          onOpenVideoModal();
-                        }}
-                        className="w-full text-left px-3 py-2 text-xs sm:text-sm text-text-primary hover:bg-surface-hover rounded-xl transition-colors flex items-center gap-2 cursor-pointer font-medium"
-                      >
-                        <Video size={14} className="text-google-blue shrink-0" />
-                        <span>Interactive Video & Studio</span>
-                      </button>
-                    )}
 
-                    {onOpenPortfolioModal && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowUserMenu(false);
-                          onOpenPortfolioModal();
-                        }}
-                        className="w-full text-left px-3 py-2 text-xs sm:text-sm text-text-primary hover:bg-surface-hover rounded-xl transition-colors flex items-center gap-2 cursor-pointer font-medium"
-                      >
-                        <Briefcase size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-                        <span>HR Portfolio & Case Study</span>
-                      </button>
-                    )}
 
                     {(onCycleThemeMode || onToggleDarkMode) && (
                       <button

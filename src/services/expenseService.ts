@@ -6,6 +6,7 @@ import {
   getDocs, 
   updateDoc, 
   deleteDoc, 
+  deleteField,
   query, 
   where, 
   orderBy, 
@@ -111,7 +112,8 @@ export function subscribeToUserGroups(
               try {
                 const updatedUids = [...(data.memberUids || []), user.uid];
                 const updatedMembers = { ...(data.members || {}) };
-                const existingRole = updatedMembers[userEmail]?.role || 'viewer';
+                const defaultRole: UserRole = data.type === 'split' ? 'editor' : 'viewer';
+                const existingRole = updatedMembers[userEmail]?.role || defaultRole;
                 updatedMembers[user.uid] = {
                   uid: user.uid,
                   email: userEmail,
@@ -146,21 +148,27 @@ export function subscribeToUserGroups(
 }
 
 // Create a new expense group
-export async function createGroup(name: string, user: User): Promise<ExpenseGroup> {
+export async function createGroup(
+  name: string, 
+  user: User, 
+  type: 'budget' | 'split' = 'budget'
+): Promise<ExpenseGroup> {
   const userEmail = (user.email || '').toLowerCase().trim();
   const groupId = `grp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const inviteCode = await generateUniqueInviteCode();
   const now = new Date().toISOString();
 
+  const cleanName = name.trim().slice(0, 35);
   const groupData: ExpenseGroup = {
     id: groupId,
-    name: name.trim(),
+    name: cleanName,
     createdBy: user.uid,
     ownerEmail: userEmail,
     memberUids: [user.uid],
     memberEmails: [userEmail],
     inviteCode,
     previousInviteCodes: [],
+    type,
     members: {
       [user.uid]: {
         uid: user.uid,
@@ -223,6 +231,69 @@ export async function inviteMemberToGroup(
   }
 }
 
+// Add member directly by name or email (ideal for quick split ledgers)
+export async function addDirectMemberToGroup(
+  group: ExpenseGroup,
+  nameOrEmail: string,
+  role: UserRole = 'editor'
+): Promise<ExpenseGroup> {
+  const clean = nameOrEmail.trim();
+  if (!clean) throw new Error('Member name or email cannot be empty');
+
+  const isEmail = clean.includes('@');
+  const memberKey = isEmail 
+    ? clean.toLowerCase() 
+    : `member_${clean.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${Date.now().toString(36).slice(-4)}`;
+
+  const newMember: GroupMember = {
+    displayName: isEmail ? clean.split('@')[0] : clean,
+    email: isEmail ? clean.toLowerCase() : '',
+    role,
+    addedAt: new Date().toISOString(),
+    joinedVia: isEmail ? 'email_invite' : 'creator'
+  };
+
+  const updatedMembers: Record<string, GroupMember> = {
+    ...(group.members || {}),
+    [memberKey]: newMember
+  };
+
+  const updatedEmails = isEmail 
+    ? Array.from(new Set([...(group.memberEmails || []), clean.toLowerCase()]))
+    : (group.memberEmails || []);
+
+  const updatedGroup: ExpenseGroup = {
+    ...group,
+    members: updatedMembers,
+    memberEmails: updatedEmails,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!group.id.startsWith('local_') && group.id !== 'local_group') {
+    try {
+      await updateDoc(doc(db, 'groups', group.id), {
+        memberEmails: updatedEmails,
+        members: updatedMembers,
+        updatedAt: updatedGroup.updatedAt
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `groups/${group.id}`);
+      throw error;
+    }
+  } else {
+    try {
+      const saved = localStorage.getItem('expenses_local_groups');
+      const list: ExpenseGroup[] = saved ? JSON.parse(saved) : [];
+      const updatedList = list.map(g => g.id === group.id ? updatedGroup : g);
+      localStorage.setItem('expenses_local_groups', JSON.stringify(updatedList));
+    } catch (e) {
+      console.warn('Could not save updated local group members to localStorage:', e);
+    }
+  }
+
+  return updatedGroup;
+}
+
 // Remove member from group
 export async function removeMemberFromGroup(
   group: ExpenseGroup,
@@ -250,16 +321,35 @@ export async function removeMemberFromGroup(
     updatedUids = updatedUids.filter(u => u !== memberKey);
   }
 
-  try {
-    await updateDoc(doc(db, 'groups', group.id), {
-      memberEmails: updatedEmails,
-      memberUids: updatedUids,
-      members: updatedMembers,
-      updatedAt: new Date().toISOString()
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, `groups/${group.id}`);
-    throw error;
+  const updatedGroup: ExpenseGroup = {
+    ...group,
+    members: updatedMembers,
+    memberEmails: updatedEmails,
+    memberUids: updatedUids,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!group.id.startsWith('local_') && group.id !== 'local_group') {
+    try {
+      await updateDoc(doc(db, 'groups', group.id), {
+        memberEmails: updatedEmails,
+        memberUids: updatedUids,
+        members: updatedMembers,
+        updatedAt: updatedGroup.updatedAt
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `groups/${group.id}`);
+      throw error;
+    }
+  } else {
+    try {
+      const saved = localStorage.getItem('expenses_local_groups');
+      const list: ExpenseGroup[] = saved ? JSON.parse(saved) : [];
+      const updatedList = list.map(g => g.id === group.id ? updatedGroup : g);
+      localStorage.setItem('expenses_local_groups', JSON.stringify(updatedList));
+    } catch (e) {
+      console.warn('Could not save updated local group members to localStorage:', e);
+    }
   }
 }
 
@@ -374,6 +464,90 @@ export async function updateMemberRole(
     handleFirestoreError(error, OperationType.UPDATE, `groups/${group.id}`);
     throw error;
   }
+}
+
+// Update a group member's UPI ID or phone number
+export async function updateGroupMemberUpi(
+  group: ExpenseGroup,
+  memberKey: string,
+  upiId: string,
+  metadata?: {
+    addedByName?: string;
+    pendingConfirmation?: boolean;
+  }
+): Promise<ExpenseGroup> {
+  const cleanUpi = upiId.trim().toLowerCase();
+  const updatedMembers: Record<string, GroupMember> = { ...(group.members || {}) };
+  const target = updatedMembers[memberKey];
+
+  const upiFields: Partial<GroupMember> = {
+    upiId: cleanUpi,
+    ...(metadata?.addedByName !== undefined ? { upiAddedBy: metadata.addedByName } : {}),
+    ...(metadata?.pendingConfirmation !== undefined ? { upiPendingConfirmation: metadata.pendingConfirmation } : {})
+  };
+
+  if (target) {
+    updatedMembers[memberKey] = {
+      ...target,
+      ...upiFields
+    };
+    if (target.email && updatedMembers[target.email.toLowerCase()]) {
+      updatedMembers[target.email.toLowerCase()] = {
+        ...updatedMembers[target.email.toLowerCase()],
+        ...upiFields
+      };
+    }
+    if (target.uid && updatedMembers[target.uid]) {
+      updatedMembers[target.uid] = {
+        ...updatedMembers[target.uid],
+        ...upiFields
+      };
+    }
+  } else {
+    const cleanKey = memberKey.toLowerCase();
+    if (updatedMembers[cleanKey]) {
+      updatedMembers[cleanKey] = {
+        ...updatedMembers[cleanKey],
+        ...upiFields
+      };
+    } else {
+      updatedMembers[memberKey] = {
+        email: memberKey.includes('@') ? memberKey.toLowerCase() : '',
+        displayName: memberKey,
+        role: 'editor',
+        addedAt: new Date().toISOString(),
+        ...upiFields
+      };
+    }
+  }
+
+  const updatedGroup: ExpenseGroup = {
+    ...group,
+    members: updatedMembers,
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!group.id.startsWith('local_') && group.id !== 'local_group') {
+    try {
+      await updateDoc(doc(db, 'groups', group.id), {
+        members: updatedMembers,
+        updatedAt: updatedGroup.updatedAt
+      });
+    } catch (error) {
+      console.warn('Could not update member UPI in Firestore:', error);
+    }
+  } else {
+    try {
+      const saved = localStorage.getItem('expenses_local_groups');
+      const list: ExpenseGroup[] = saved ? JSON.parse(saved) : [];
+      const updatedList = list.map(g => g.id === group.id ? updatedGroup : g);
+      localStorage.setItem('expenses_local_groups', JSON.stringify(updatedList));
+    } catch (e) {
+      console.warn('Could not save updated local group members to localStorage:', e);
+    }
+  }
+
+  return updatedGroup;
 }
 
 // Group Owner can rotate / regenerate the invite code to invalidate compromised links
@@ -491,7 +665,8 @@ async function attachUserToGroup(group: ExpenseGroup, user: User, codeUsed?: str
   const isOwner = group.createdBy === user.uid || (group.ownerEmail && group.ownerEmail.toLowerCase() === userEmail);
   const wasAlreadyMember = isOwner || group.memberUids?.includes(user.uid) || group.memberEmails?.includes(userEmail);
   const existingMember = group.members?.[user.uid] || group.members?.[userEmail];
-  const assignedRole = isOwner ? 'owner' : (existingMember?.role || 'viewer');
+  const defaultJoinRole: UserRole = group.type === 'split' ? 'editor' : 'viewer';
+  const assignedRole = isOwner ? 'owner' : (existingMember?.role || defaultJoinRole);
 
   const updatedUids = Array.from(new Set([...(group.memberUids || []), user.uid]));
   const updatedEmails = Array.from(new Set([...(group.memberEmails || []), userEmail]));
@@ -568,11 +743,39 @@ export function subscribeToGroupExpenses(
   );
 }
 
+// Single-fetch helper to retrieve expenses for reconciliation
+export async function getGroupExpensesOnce(groupId: string): Promise<Transaction[]> {
+  if (!groupId || groupId.startsWith('local_') || groupId === 'local_group') {
+    try {
+      const savedTx = localStorage.getItem('expenses_transactions');
+      if (savedTx) {
+        return JSON.parse(savedTx);
+      }
+    } catch (e) {
+      console.warn('Could not read local expenses:', e);
+    }
+    return [];
+  }
+
+  const path = `groups/${groupId}/expenses`;
+  try {
+    const snap = await getDocs(collection(db, 'groups', groupId, 'expenses'));
+    const list: Transaction[] = [];
+    snap.forEach((d) => {
+      list.push({ ...(d.data() as Omit<Transaction, 'id'>), id: d.id });
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+    return [];
+  }
+}
+
 // Add transaction to group
 export async function addExpenseToGroup(
   groupId: string,
   expense: Omit<Transaction, 'id' | 'groupId'>,
-  user: User
+  user?: User | null
 ): Promise<Transaction> {
   const expenseId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
   const path = `groups/${groupId}/expenses/${expenseId}`;
@@ -581,10 +784,22 @@ export async function addExpenseToGroup(
     ...expense,
     id: expenseId,
     groupId,
-    createdBy: user.uid,
-    createdByName: user.displayName || user.email?.split('@')[0] || 'Member',
+    createdBy: user?.uid || 'guest',
+    createdByName: user?.displayName || user?.email?.split('@')[0] || 'Member',
     createdAt: new Date().toISOString()
   };
+
+  if (!user || groupId.startsWith('local_') || groupId === 'local_group') {
+    try {
+      const savedTx = localStorage.getItem('expenses_transactions');
+      const list: Transaction[] = savedTx ? JSON.parse(savedTx) : [];
+      const updated = [fullExpense, ...list.filter(t => t.id !== expenseId)];
+      localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+    } catch (e) {
+      console.warn('Could not save local expense to localStorage:', e);
+    }
+    return fullExpense;
+  }
 
   try {
     await setDoc(doc(db, 'groups', groupId, 'expenses', expenseId), fullExpense);
@@ -595,12 +810,85 @@ export async function addExpenseToGroup(
   }
 }
 
-// Edit transaction
+// Check if a date string is within the past 30 days
+export function isWithinPast30Days(dateStr?: string): boolean {
+  if (!dateStr) return false;
+  const then = new Date(dateStr).getTime();
+  if (isNaN(then)) return false;
+  const now = Date.now();
+  const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+  return (now - then) <= thirtyDaysMs;
+}
+
+// Edit transaction with audit tracking
 export async function updateExpenseInGroup(
   groupId: string,
   expenseId: string,
-  updates: Partial<Transaction>
+  updates: Partial<Transaction>,
+  user?: User | null
 ): Promise<void> {
+  const now = new Date().toISOString();
+  const enrichedUpdates: Partial<Transaction> = { ...updates };
+  if (user) {
+    enrichedUpdates.lastEditedBy = user.uid;
+    enrichedUpdates.lastEditedByName = user.displayName || user.email?.split('@')[0] || 'Member';
+    enrichedUpdates.lastEditedAt = now;
+  }
+
+  if (groupId.startsWith('local_') || groupId === 'local_group') {
+    try {
+      const savedTx = localStorage.getItem('expenses_transactions');
+      if (savedTx) {
+        const list: Transaction[] = JSON.parse(savedTx);
+        const updated = list.map(t => t.id === expenseId ? { ...t, ...enrichedUpdates } : t);
+        localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.warn('Could not update local expense in localStorage:', e);
+    }
+    return;
+  }
+
+  const path = `groups/${groupId}/expenses/${expenseId}`;
+  try {
+    await updateDoc(doc(db, 'groups', groupId, 'expenses', expenseId), enrichedUpdates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+    throw error;
+  }
+}
+
+// Soft delete transaction (moved to 30-day Recently Deleted list)
+export async function softDeleteExpenseInGroup(
+  groupId: string,
+  expenseId: string,
+  user?: User | null,
+  reason?: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  const userName = user?.displayName || user?.email?.split('@')[0] || 'Member';
+  const updates: Partial<Transaction> = {
+    isDeleted: true,
+    deletedAt: now,
+    deletedBy: user?.uid || 'guest',
+    deletedByName: userName,
+    deletedReason: reason || 'Manual deletion'
+  };
+
+  if (groupId.startsWith('local_') || groupId === 'local_group') {
+    try {
+      const savedTx = localStorage.getItem('expenses_transactions');
+      if (savedTx) {
+        const list: Transaction[] = JSON.parse(savedTx);
+        const updated = list.map(t => t.id === expenseId ? { ...t, ...updates } : t);
+        localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.warn('Could not soft-delete local expense in localStorage:', e);
+    }
+    return;
+  }
+
   const path = `groups/${groupId}/expenses/${expenseId}`;
   try {
     await updateDoc(doc(db, 'groups', groupId, 'expenses', expenseId), updates);
@@ -610,11 +898,67 @@ export async function updateExpenseInGroup(
   }
 }
 
-// Delete transaction
+// Restore transaction from Recently Deleted
+export async function restoreExpenseInGroup(
+  groupId: string,
+  expenseId: string
+): Promise<void> {
+  const updates: any = {
+    isDeleted: false,
+    deletedAt: deleteField(),
+    deletedBy: deleteField(),
+    deletedByName: deleteField(),
+    deletedReason: deleteField()
+  };
+
+  if (groupId.startsWith('local_') || groupId === 'local_group') {
+    try {
+      const savedTx = localStorage.getItem('expenses_transactions');
+      if (savedTx) {
+        const list: Transaction[] = JSON.parse(savedTx);
+        const updated = list.map(t => {
+          if (t.id === expenseId) {
+            const { isDeleted, deletedAt, deletedBy, deletedByName, deletedReason, ...rest } = t;
+            return { ...rest, isDeleted: false };
+          }
+          return t;
+        });
+        localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.warn('Could not restore local expense in localStorage:', e);
+    }
+    return;
+  }
+
+  const path = `groups/${groupId}/expenses/${expenseId}`;
+  try {
+    await updateDoc(doc(db, 'groups', groupId, 'expenses', expenseId), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+    throw error;
+  }
+}
+
+// Delete transaction permanently (hard delete)
 export async function deleteExpenseFromGroup(
   groupId: string,
   expenseId: string
 ): Promise<void> {
+  if (groupId.startsWith('local_') || groupId === 'local_group') {
+    try {
+      const savedTx = localStorage.getItem('expenses_transactions');
+      if (savedTx) {
+        const list: Transaction[] = JSON.parse(savedTx);
+        const filtered = list.filter(t => t.id !== expenseId);
+        localStorage.setItem('expenses_transactions', JSON.stringify(filtered));
+      }
+    } catch (e) {
+      console.warn('Could not delete local expense from localStorage:', e);
+    }
+    return;
+  }
+
   const path = `groups/${groupId}/expenses/${expenseId}`;
   try {
     await deleteDoc(doc(db, 'groups', groupId, 'expenses', expenseId));
@@ -624,6 +968,8 @@ export async function deleteExpenseFromGroup(
   }
 }
 
+export const permanentDeleteExpenseFromGroup = deleteExpenseFromGroup;
+
 // Settle transaction
 export async function settleExpenseInGroup(
   groupId: string,
@@ -632,14 +978,30 @@ export async function settleExpenseInGroup(
   note: string
 ): Promise<void> {
   const finalAmount = Math.max(0, expense.amount - refundAmount);
+  const updates: Partial<Transaction> = {
+    settled: true,
+    originalAmount: expense.originalAmount || expense.amount,
+    amount: finalAmount,
+    note: note || 'Settled with refund/discount'
+  };
+
+  if (groupId.startsWith('local_') || groupId === 'local_group') {
+    try {
+      const savedTx = localStorage.getItem('expenses_transactions');
+      if (savedTx) {
+        const list: Transaction[] = JSON.parse(savedTx);
+        const updated = list.map(t => t.id === expense.id ? { ...t, ...updates } : t);
+        localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.warn('Could not settle local expense in localStorage:', e);
+    }
+    return;
+  }
+
   const path = `groups/${groupId}/expenses/${expense.id}`;
   try {
-    await updateDoc(doc(db, 'groups', groupId, 'expenses', expense.id), {
-      settled: true,
-      originalAmount: expense.originalAmount || expense.amount,
-      amount: finalAmount,
-      note: note || 'Settled with refund/discount'
-    });
+    await updateDoc(doc(db, 'groups', groupId, 'expenses', expense.id), updates);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
     throw error;
@@ -651,13 +1013,29 @@ export async function undoSettleExpenseInGroup(
   groupId: string,
   expense: Transaction
 ): Promise<void> {
+  const updates: Partial<Transaction> = {
+    settled: false,
+    amount: expense.originalAmount || expense.amount,
+    note: ''
+  };
+
+  if (groupId.startsWith('local_') || groupId === 'local_group') {
+    try {
+      const savedTx = localStorage.getItem('expenses_transactions');
+      if (savedTx) {
+        const list: Transaction[] = JSON.parse(savedTx);
+        const updated = list.map(t => t.id === expense.id ? { ...t, ...updates } : t);
+        localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.warn('Could not undo settle local expense in localStorage:', e);
+    }
+    return;
+  }
+
   const path = `groups/${groupId}/expenses/${expense.id}`;
   try {
-    await updateDoc(doc(db, 'groups', groupId, 'expenses', expense.id), {
-      settled: false,
-      amount: expense.originalAmount || expense.amount,
-      note: ''
-    });
+    await updateDoc(doc(db, 'groups', groupId, 'expenses', expense.id), updates);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
     throw error;
@@ -1364,4 +1742,57 @@ export async function updateGroupCustomCategories(
     throw error;
   }
 }
+
+/**
+ * Real-time listener for user cloud preferences (such as per-ledger Gemini states)
+ * Enables seamless cross-device synchronization.
+ */
+export function subscribeToUserPreferences(
+  userId: string,
+  onUpdate: (prefs: Record<string, boolean>) => void
+): () => void {
+  if (!userId) return () => {};
+  const userRef = doc(db, 'users', userId);
+  return onSnapshot(
+    userRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        const geminiPrefs = data?.geminiPreferences;
+        if (geminiPrefs && typeof geminiPrefs === 'object') {
+          onUpdate(geminiPrefs);
+        }
+      }
+    },
+    (err) => {
+      console.warn('Could not sync user preferences from Firestore:', err);
+    }
+  );
+}
+
+/**
+ * Saves a per-ledger Gemini preference to the user profile in Firestore
+ */
+export async function saveUserLedgerGeminiPreference(
+  userId: string,
+  groupId: string,
+  enabled: boolean
+): Promise<void> {
+  if (!userId) return;
+  try {
+    const userRef = doc(db, 'users', userId);
+    await setDoc(
+      userRef,
+      {
+        geminiPreferences: {
+          [groupId]: enabled
+        }
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('Failed to save per-ledger preference to cloud:', err);
+  }
+}
+
 

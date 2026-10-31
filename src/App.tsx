@@ -17,7 +17,11 @@ import {
   LogIn,
   AlertCircle,
   Wallet,
-  X
+  X,
+  ReceiptText,
+  UserCheck,
+  Users,
+  UserPlus
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 import { Navbar } from './components/Navbar';
@@ -29,17 +33,38 @@ import { RecurringModal } from './components/modals/RecurringModal';
 import { CategoryModal } from './components/modals/CategoryModal';
 import { MergeOfflineModal } from './components/modals/MergeOfflineModal';
 import { OnboardingModal } from './components/modals/OnboardingModal';
+import { ProfileSetupModal } from './components/modals/ProfileSetupModal';
+import { LandingPage } from './components/LandingPage';
 import { DeleteAccountModal } from './components/modals/DeleteAccountModal';
 import { InstallAppModal } from './components/modals/InstallAppModal';
 import { LedgerContextModal } from './components/modals/LedgerContextModal';
+import { VoiceInputModal } from './components/modals/VoiceInputModal';
+import { GeminiIcon } from './components/icons/GeminiIcon';
 import { AppToast, type ToastData } from './components/notifications/AppToast';
 import { purgeAllLocalData } from './services/accountService';
+import { updateProfile } from 'firebase/auth';
 
 import { OverviewTab } from './components/tabs/OverviewTab';
 import { TransactionsTab } from './components/tabs/TransactionsTab';
 import { ShoppingTab } from './components/tabs/ShoppingTab';
 import { FixedTab } from './components/tabs/FixedTab';
 import { SettingsTab } from './components/tabs/SettingsTab';
+import { SplitGroupView } from './components/split/SplitGroupView';
+import { SplitIndividualView } from './components/split/SplitIndividualView';
+import { SplitExpenseModal } from './components/split/SplitExpenseModal';
+import { QuickSettleModal } from './components/split/QuickSettleModal';
+import { InviteMemberModal } from './components/modals/InviteMemberModal';
+import { UpiReviewModal } from './components/modals/UpiReviewModal';
+import { 
+  getGroupMembersList, 
+  revertSettlementOnExpenses, 
+  recordSettlementPayment, 
+  matchMemberKeys,
+  getCanonicalMemberName,
+  formatSettlementDisplayTitle,
+  autoSettleMemberExpenses,
+  validateSettlementRestore
+} from './services/splitService';
 
 import type { 
   Transaction, 
@@ -59,6 +84,9 @@ import {
   deleteNotification,
   dispatchDailyExpenseSummary,
   dispatchBuyingItemNotification,
+  dispatchSplitExpenseNotification,
+  dispatchSettlementNotification,
+  dispatchSettlementReminderNotification,
   getPushPermissionState,
   requestPushPermission,
   showDeviceNotification,
@@ -92,10 +120,21 @@ import {
   syncLocalDataToGroup,
   reassignCategoryInCloudGroup,
   updateGroupCustomCategories,
+  subscribeToUserPreferences,
+  saveUserLedgerGeminiPreference,
   getLocalTodayIso,
   getDueOccurrences,
-  getNextOccurrenceDate
+  getNextOccurrenceDate,
+  addDirectMemberToGroup,
+  updateGroupMemberUpi,
+  softDeleteExpenseInGroup,
+  restoreExpenseInGroup,
+  permanentDeleteExpenseFromGroup
 } from './services/expenseService';
+
+import { getSavedPersonalUpi, savePersonalUpi, removePersonalUpi } from './utils/upiUtils';
+import { db } from './firebase';
+import { doc, setDoc } from 'firebase/firestore';
 
 import { 
   getCachedExpenses, 
@@ -114,10 +153,16 @@ import {
 } from './services/offlineSyncService';
 
 const DEFAULT_CATEGORIES: Record<string, CategoryData> = {
-  groceries: { name: 'Groceries', color: 'text-google-blue', bg: 'bg-google-blue/10', hex: '#1a73e8', iconName: 'ShoppingCart' },
-  utilities: { name: 'Utilities', color: 'text-amber-700', bg: 'bg-amber-50', hex: '#F4B400', iconName: 'Zap' },
-  investments: { name: 'Investments', color: 'text-blue-700', bg: 'bg-blue-50', hex: '#4285F4', iconName: 'TrendingUp' },
-  other: { name: 'Other', color: 'text-purple-700', bg: 'bg-purple-50', hex: '#AB47BC', iconName: 'Tag' }
+  groceries: { name: 'Groceries', hex: '#059669', color: '#059669', bg: '#05966914', iconName: 'ShoppingCart' },
+  food: { name: 'Food & Dining', hex: '#EA580C', color: '#EA580C', bg: '#EA580C14', iconName: 'Utensils' },
+  utilities: { name: 'Bills & Recharge', hex: '#D97706', color: '#D97706', bg: '#D9770614', iconName: 'Zap' },
+  rent: { name: 'Home & Rent', hex: '#0D9488', color: '#0D9488', bg: '#0D948814', iconName: 'Home' },
+  travel: { name: 'Travel & Petrol', hex: '#0284C7', color: '#0284C7', bg: '#0284C714', iconName: 'Car' },
+  medical: { name: 'Health & Medicine', hex: '#DC2626', color: '#DC2626', bg: '#DC262614', iconName: 'HeartPulse' },
+  shopping: { name: 'Shopping', hex: '#7C3AED', color: '#7C3AED', bg: '#7C3AED14', iconName: 'ShoppingBag' },
+  education: { name: 'Education', hex: '#4F46E5', color: '#4F46E5', bg: '#4F46E514', iconName: 'BookOpen' },
+  investments: { name: 'Investments & Loans', hex: '#2563EB', color: '#2563EB', bg: '#2563EB14', iconName: 'TrendingUp' },
+  other: { name: 'Other', hex: '#64748B', color: '#64748B', bg: '#64748B14', iconName: 'Tag' }
 };
 
 function getSavedActiveGroupId(userUid?: string | null): string {
@@ -149,10 +194,10 @@ export default function App() {
   const { user, loading: authLoading, signInWithGoogle, authError, clearAuthError } = useAuth();
 
   // Navigation tab state (remembers last active tab across app closes)
-  const [activeTab, setActiveTab] = useState<'Overview' | 'Transactions' | 'Lists' | 'Fixed' | 'Settings'>(() => {
+  const [activeTab, setActiveTab] = useState<'Overview' | 'Transactions' | 'Lists' | 'Fixed' | 'Settings' | 'Group' | 'Individual'>(() => {
     try {
       const saved = localStorage.getItem('hisaab_active_tab');
-      if (saved === 'Overview' || saved === 'Transactions' || saved === 'Lists' || saved === 'Fixed' || saved === 'Settings') {
+      if (saved === 'Overview' || saved === 'Transactions' || saved === 'Lists' || saved === 'Fixed' || saved === 'Settings' || saved === 'Group' || saved === 'Individual') {
         return saved;
       }
     } catch {}
@@ -223,6 +268,11 @@ export default function App() {
 
   // Group data
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const transactionsRef = useRef<Transaction[]>(transactions);
+  useEffect(() => {
+    transactionsRef.current = transactions;
+  }, [transactions]);
+  const activeTransactions = useMemo(() => transactions.filter(t => !t.isDeleted), [transactions]);
   const [shoppingItems, setShoppingItems] = useState<ShoppingItem[]>([]);
   const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>([]);
 
@@ -243,6 +293,46 @@ export default function App() {
     return '';
   });
   const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [showSplitExpenseModal, setShowSplitExpenseModal] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showSettleModal, setShowSettleModal] = useState(false);
+  const [settleDebtor, setSettleDebtor] = useState<{ key: string; name: string } | null>(null);
+  const [settleCreditor, setSettleCreditor] = useState<{ key: string; name: string } | null>(null);
+  const [settleAmount, setSettleAmount] = useState<number>(0);
+  const [splitTab, setSplitTab] = useState<'group' | 'individual' | 'settings'>('group');
+  const [showVoiceModal, setShowVoiceModal] = useState(false);
+
+  // Helper to read per-ledger Gemini setting
+  const readLedgerGeminiSetting = useCallback((groupId: string): boolean => {
+    try {
+      const saved = localStorage.getItem(`hisaab_gemini_enabled_${groupId}`);
+      if (saved !== null) {
+        return JSON.parse(saved);
+      }
+      // Check legacy global preference for backward compatibility
+      const legacy = localStorage.getItem('hisaab_gemini_enabled');
+      return legacy !== null ? JSON.parse(legacy) : false;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // Per-ledger Gemini preference map
+  const [ledgerGeminiMap, setLedgerGeminiMap] = useState<Record<string, boolean>>(() => {
+    const initialGid = getSavedActiveGroupId() || 'local_group';
+    return {
+      [initialGid]: (() => {
+        try {
+          const saved = localStorage.getItem(`hisaab_gemini_enabled_${initialGid}`);
+          if (saved !== null) return JSON.parse(saved);
+          const legacy = localStorage.getItem('hisaab_gemini_enabled');
+          return legacy !== null ? JSON.parse(legacy) : false;
+        } catch {
+          return false;
+        }
+      })()
+    };
+  });
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [convertingShoppingItemIds, setConvertingShoppingItemIds] = useState<string[] | null>(null);
   const [settleTx, setSettleTx] = useState<Transaction | null>(null);
@@ -261,6 +351,19 @@ export default function App() {
         return false;
       }
       return viewed !== 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Track if visitor explicitly opted to explore local guest mode
+  const [guestMode, setGuestMode] = useState<boolean>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('joinCode') || params.get('code')) {
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
@@ -297,10 +400,100 @@ export default function App() {
       showToast(msg);
     }
   }, [showToast]);
+
   const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
   const [showResetDataModal, setShowResetDataModal] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  // Post-Sign In Profile Setup (Full Name & UPI Verification)
+  const [showProfileSetupModal, setShowProfileSetupModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (user && !authLoading) {
+      try {
+        const completed = localStorage.getItem(`hisaab_profile_completed_${user.uid}`);
+        if (completed !== 'true') {
+          setShowProfileSetupModal(true);
+        }
+      } catch {
+        setShowProfileSetupModal(true);
+      }
+    } else {
+      setShowProfileSetupModal(false);
+    }
+  }, [user?.uid, authLoading]);
+
+  const handleCompleteProfileSetup = async (displayName: string, upiId: string) => {
+    if (!user) return;
+    try {
+      // 1. Update Firebase Auth displayName
+      try {
+        await updateProfile(user, { displayName });
+      } catch (e) {
+        console.warn('Auth displayName update notice:', e);
+      }
+
+      // 2. Persist in Firestore user document
+      try {
+        await setDoc(
+          doc(db, 'users', user.uid),
+          {
+            uid: user.uid,
+            email: (user.email || '').toLowerCase(),
+            displayName,
+            upiId: upiId || '',
+            profileCompleted: true,
+            updatedAt: new Date().toISOString()
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        console.warn('Firestore user doc update notice:', e);
+      }
+
+      // 3. Save local UPI ID if entered
+      if (upiId) {
+        savePersonalUpi(upiId);
+      }
+
+      // 4. Update member details in active group if cloud group
+      if (activeGroup && !activeGroup.id.startsWith('local_') && activeGroup.id !== 'local_group') {
+        try {
+          if (upiId) {
+            await updateGroupMemberUpi(activeGroup, user.uid, upiId);
+          }
+        } catch (e) {
+          console.warn('Group member UPI update notice:', e);
+        }
+      }
+
+      // 5. Save completion flag in localStorage
+      localStorage.setItem(`hisaab_profile_completed_${user.uid}`, 'true');
+      setShowProfileSetupModal(false);
+
+      showToast({
+        message: 'Profile completed!',
+        subMessage: upiId ? `UPI ID ${upiId} linked for settlements` : 'Welcome to Hisaab Barabar',
+        type: 'info'
+      });
+    } catch (err: any) {
+      console.warn('Error completing profile setup:', err);
+      showToast({
+        message: 'Could not complete profile',
+        subMessage: err?.message || 'Please check your connection',
+        type: 'error'
+      });
+    }
+  };
+
+  // Recipient UPI review state (prompting member when a friend added their UPI)
+  const [pendingUpiReview, setPendingUpiReview] = useState<{
+    upiId: string;
+    group: ExpenseGroup;
+    memberKey: string;
+    addedBy?: string;
+  } | null>(null);
 
   // Standalone PWA detection (iOS Safari, Android standalone, Desktop Chrome/Edge)
   const [isStandalone, setIsStandalone] = useState<boolean>(() => {
@@ -595,13 +788,18 @@ export default function App() {
         const action = params.get('action');
         if (action === 'add-expense') {
           setEditingTx(null);
-          setShowExpenseModal(true);
+          const targetGroup = groups.find(g => g.id === activeGroupId) || groups[0];
+          if (targetGroup?.type === 'split') {
+            setShowSplitExpenseModal(true);
+          } else {
+            setShowExpenseModal(true);
+          }
           const url = new URL(window.location.href);
           url.searchParams.delete('action');
           window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : ''));
         }
 
-        // 2. Tab navigation shortcut: ?tab=transactions / ?tab=shopping / ?tab=fixed / ?tab=settings / ?tab=overview
+        // 2. Tab navigation shortcut: ?tab=transactions / ?tab=shopping / ?tab=fixed / ?tab=settings / ?tab=overview / ?tab=group / ?tab=individual
         const tabParam = params.get('tab')?.toLowerCase();
         if (tabParam) {
           if (tabParam === 'transactions' || tabParam === 'ledger') {
@@ -614,6 +812,10 @@ export default function App() {
             setActiveTab('Settings');
           } else if (tabParam === 'overview') {
             setActiveTab('Overview');
+          } else if (tabParam === 'group') {
+            setActiveTab('Group');
+          } else if (tabParam === 'individual') {
+            setActiveTab('Individual');
           }
           const url = new URL(window.location.href);
           url.searchParams.delete('tab');
@@ -627,11 +829,120 @@ export default function App() {
     handleUrlActions();
     window.addEventListener('popstate', handleUrlActions);
     return () => window.removeEventListener('popstate', handleUrlActions);
-  }, []);
+  }, [groups, activeGroupId]);
+
+  // Check if any group has an unconfirmed UPI ID added for the current user
+  useEffect(() => {
+    if (!groups || groups.length === 0) return;
+    
+    const myUid = user?.uid;
+    const myEmail = (user?.email || '').toLowerCase().trim();
+    if (!myUid && !myEmail) return;
+
+    let reviewedUpis: string[] = [];
+    try {
+      const stored = localStorage.getItem('hisaab_reviewed_upis');
+      if (stored) reviewedUpis = JSON.parse(stored);
+    } catch {}
+
+    const myCurrentPersonalUpi = getSavedPersonalUpi().toLowerCase().trim();
+
+    for (const grp of groups) {
+      if (!grp.members) continue;
+      for (const [key, m] of Object.entries(grp.members)) {
+        const isMe = (myUid && m.uid === myUid) || 
+                     (myEmail && (m.email?.toLowerCase() === myEmail || key.toLowerCase() === myEmail)) ||
+                     (myUid && key === myUid);
+        if (isMe && m.upiId) {
+          const cleanUpi = m.upiId.trim().toLowerCase();
+          const alreadyReviewed = reviewedUpis.includes(cleanUpi);
+          if (!alreadyReviewed && (m.upiPendingConfirmation || !myCurrentPersonalUpi)) {
+            setPendingUpiReview({
+              upiId: cleanUpi,
+              group: grp,
+              memberKey: key,
+              addedBy: m.upiAddedBy
+            });
+            return;
+          }
+        }
+      }
+    }
+  }, [groups, user]);
+
+  const handleConfirmUpiReview = async (confirmedUpi: string) => {
+    if (!pendingUpiReview) return;
+    const { group, memberKey } = pendingUpiReview;
+
+    savePersonalUpi(confirmedUpi);
+
+    try {
+      const stored = localStorage.getItem('hisaab_reviewed_upis');
+      const list: string[] = stored ? JSON.parse(stored) : [];
+      if (!list.includes(confirmedUpi)) list.push(confirmedUpi);
+      localStorage.setItem('hisaab_reviewed_upis', JSON.stringify(list));
+    } catch {}
+
+    await updateGroupMemberUpi(group, memberKey, confirmedUpi, {
+      pendingConfirmation: false
+    });
+
+    if (user) {
+      try {
+        await setDoc(
+          doc(db, 'users', user.uid),
+          { upiId: confirmedUpi },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Could not sync user profile UPI to Firestore:', err);
+      }
+    }
+
+    setToastMessage('UPI ID confirmed for your profile');
+    setPendingUpiReview(null);
+  };
+
+  const handleRemoveUpiReview = async () => {
+    if (!pendingUpiReview) return;
+    const { group, memberKey, upiId } = pendingUpiReview;
+
+    removePersonalUpi();
+
+    try {
+      const stored = localStorage.getItem('hisaab_reviewed_upis');
+      const list: string[] = stored ? JSON.parse(stored) : [];
+      if (!list.includes(upiId)) list.push(upiId);
+      localStorage.setItem('hisaab_reviewed_upis', JSON.stringify(list));
+    } catch {}
+
+    await updateGroupMemberUpi(group, memberKey, '', {
+      pendingConfirmation: false
+    });
+
+    if (user) {
+      try {
+        await setDoc(
+          doc(db, 'users', user.uid),
+          { upiId: '' },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Could not clear user profile UPI in Firestore:', err);
+      }
+    }
+
+    setToastMessage('UPI ID removed');
+    setPendingUpiReview(null);
+  };
 
   // Android & Mobile Browser Hardware/Gesture Back Button handling for modals
   const isAnyModalOpen = Boolean(
     showExpenseModal || 
+    showSplitExpenseModal ||
+    showInviteModal ||
+    showSettleModal ||
+    showVoiceModal ||
     settleTx || 
     showGroupModal || 
     showJoinModal || 
@@ -642,7 +953,8 @@ export default function App() {
     showDeleteAccountModal || 
     showResetDataModal || 
     showInstallModal || 
-    ledgerContextGroup
+    ledgerContextGroup ||
+    pendingUpiReview
   );
 
   const modalPushedRef = useRef(false);
@@ -655,6 +967,12 @@ export default function App() {
       const handlePopState = () => {
         modalPushedRef.current = false;
         setShowExpenseModal(false);
+        setShowSplitExpenseModal(false);
+        setShowInviteModal(false);
+        setShowSettleModal(false);
+        setSettleDebtor(null);
+        setSettleCreditor(null);
+        setShowVoiceModal(false);
         setEditingTx(null);
         setSettleTx(null);
         setShowGroupModal(false);
@@ -668,6 +986,7 @@ export default function App() {
         setShowResetDataModal(false);
         setShowInstallModal(false);
         setLedgerContextGroup(null);
+        setPendingUpiReview(null);
       };
 
       window.addEventListener('popstate', handlePopState, { once: true });
@@ -912,12 +1231,15 @@ export default function App() {
   }, [user, groups, localTransactions, localShopping, localRecurring, genuineGuestTransactions.length, genuineGuestShopping.length, genuineGuestRecurring.length, hasCheckedMergeForUser, isGuestGroupId]);
 
   // Create new group handler (works for both logged-in and guest users)
-  const handleCreateNewGroup = async (name: string): Promise<ExpenseGroup | null> => {
+  const handleCreateNewGroup = async (
+    name: string, 
+    type: 'budget' | 'split' = 'budget'
+  ): Promise<ExpenseGroup | null> => {
     const cleanName = name.trim();
     if (!cleanName) return null;
 
     if (user) {
-      const created = await createGroup(cleanName, user);
+      const created = await createGroup(cleanName, user, type);
       setGroups(prev => [created, ...prev.filter(g => g.id !== created.id)]);
       setActiveGroupId(created.id);
       saveActiveGroupId(created.id, user.uid);
@@ -927,6 +1249,7 @@ export default function App() {
       const newLocalGroup: ExpenseGroup = {
         id: newId,
         name: cleanName,
+        type: type || 'budget',
         createdBy: 'guest',
         ownerEmail: 'guest@device',
         memberUids: ['guest'],
@@ -1031,6 +1354,74 @@ export default function App() {
     return 'viewer';
   }, [user, activeGroup]);
 
+  const isSplitLedger = activeGroup?.type === 'split';
+  const splitMembersList = useMemo(() => {
+    if (!activeGroup || activeGroup.type !== 'split') return [];
+    return getGroupMembersList(activeGroup, user?.uid, user?.email || undefined);
+  }, [activeGroup, user]);
+  const splitMemberCount = splitMembersList.length;
+
+  // Whenever activeGroupId changes, sync the per-ledger Gemini preference
+  useEffect(() => {
+    const gid = activeGroupId || 'local_group';
+    setLedgerGeminiMap(prev => {
+      if (gid in prev) return prev;
+      return { ...prev, [gid]: readLedgerGeminiSetting(gid) };
+    });
+  }, [activeGroupId, readLedgerGeminiSetting]);
+
+  // Cross-device sync: Listen to user profile preferences from Firestore
+  useEffect(() => {
+    if (!user?.uid) return;
+    return subscribeToUserPreferences(user.uid, (cloudPrefs) => {
+      setLedgerGeminiMap(prev => {
+        const next = { ...prev };
+        let hasChanged = false;
+        Object.entries(cloudPrefs).forEach(([gid, isEnabled]) => {
+          try {
+            localStorage.setItem(`hisaab_gemini_enabled_${gid}`, JSON.stringify(isEnabled));
+          } catch {}
+          if (next[gid] !== isEnabled) {
+            next[gid] = isEnabled;
+            hasChanged = true;
+          }
+        });
+        return hasChanged ? next : prev;
+      });
+    });
+  }, [user?.uid]);
+
+  // Effective Gemini state for the active ledger:
+  // Split ledgers do not use Gemini AI (not required).
+  // When a ledger is view-only, Gemini is strictly disabled & uneditable.
+  const effectiveGeminiEnabled = useMemo(() => {
+    if (activeGroup?.type === 'split') return false;
+    if (userRole === 'viewer') return false;
+    const gid = activeGroupId || 'local_group';
+    return ledgerGeminiMap[gid] ?? readLedgerGeminiSetting(gid);
+  }, [activeGroup?.type, userRole, activeGroupId, ledgerGeminiMap, readLedgerGeminiSetting]);
+
+  const handleToggleGemini = useCallback((enabled: boolean) => {
+    if (userRole === 'viewer') return;
+    const gid = activeGroupId || 'local_group';
+    setLedgerGeminiMap(prev => ({ ...prev, [gid]: enabled }));
+    try {
+      localStorage.setItem(`hisaab_gemini_enabled_${gid}`, JSON.stringify(enabled));
+    } catch {}
+
+    // Cloud sync across devices for authenticated user
+    if (user?.uid) {
+      saveUserLedgerGeminiPreference(user.uid, gid, enabled);
+    }
+
+    showToast({
+      message: enabled 
+        ? `Gemini AI enabled for ${activeGroup?.name || 'this ledger'}` 
+        : `Restored classic Ledger navigation for ${activeGroup?.name || 'this ledger'}`,
+      type: 'info'
+    });
+  }, [userRole, activeGroupId, activeGroup?.name, user?.uid, showToast]);
+
   // Categories - Ledger Scoped (Material 3 & Apple HIG Multi-tenancy)
   const categories: Record<string, CategoryData> = useMemo(() => {
     return {
@@ -1132,6 +1523,7 @@ export default function App() {
         setShowCategoryModal(false);
         setShowMergeModal(false);
         setShowOnboardingModal(false);
+        setShowProfileSetupModal(false);
         setShowDeleteAccountModal(false);
         setShowResetDataModal(false);
         setShowInstallModal(false);
@@ -1144,7 +1536,11 @@ export default function App() {
       if ((e.key === 'e' || e.key === 'n' || e.key === '+') && userRole !== 'viewer') {
         e.preventDefault();
         setEditingTx(null);
-        setShowExpenseModal(true);
+        if (isSplitLedger) {
+          setShowSplitExpenseModal(true);
+        } else {
+          setShowExpenseModal(true);
+        }
       } else if (e.key === '1') {
         setActiveTab('Overview');
       } else if (e.key === '2') {
@@ -1609,9 +2005,22 @@ export default function App() {
     const isDifferent = groupId !== activeGroupId;
     setActiveGroupId(groupId);
     saveActiveGroupId(groupId, user?.uid);
-    if (showToastFeedback && isDifferent) {
+    if (isDifferent) {
       const g = groups.find(item => item.id === groupId);
-      if (g) {
+      if (g?.type === 'split') {
+        if (activeTab === 'Lists' || activeTab === 'Fixed' || activeTab === 'Overview') {
+          setActiveTab('Group');
+        } else if (activeTab === 'Transactions') {
+          setActiveTab('Individual');
+        }
+      } else {
+        if (activeTab === 'Group') {
+          setActiveTab('Overview');
+        } else if (activeTab === 'Individual') {
+          setActiveTab('Transactions');
+        }
+      }
+      if (showToastFeedback && g) {
         const userEmail = (user?.email || '').toLowerCase().trim();
         const isOwner = g.createdBy === user?.uid || (g.ownerEmail && g.ownerEmail.toLowerCase() === userEmail);
         showToast({
@@ -1622,6 +2031,42 @@ export default function App() {
         });
       }
     }
+  };
+
+  const handleOpenSettleModal = (
+    debtor: { key: string; name: string } | string,
+    creditor: { key: string; name: string } | string,
+    amount?: number
+  ) => {
+    let debtorObj: { key: string; name: string };
+    let creditorObj: { key: string; name: string };
+
+    if (typeof debtor === 'string') {
+      const isMe = debtor === user?.uid || debtor === 'guest' || debtor === 'you';
+      const mem = activeGroup?.members?.[debtor];
+      debtorObj = {
+        key: debtor,
+        name: isMe ? 'You' : (mem?.displayName || mem?.email?.split('@')[0] || 'Member')
+      };
+    } else {
+      debtorObj = debtor;
+    }
+
+    if (typeof creditor === 'string') {
+      const isMe = creditor === user?.uid || creditor === 'guest' || creditor === 'you';
+      const mem = activeGroup?.members?.[creditor];
+      creditorObj = {
+        key: creditor,
+        name: isMe ? 'You' : (mem?.displayName || mem?.email?.split('@')[0] || 'Member')
+      };
+    } else {
+      creditorObj = creditor;
+    }
+
+    setSettleDebtor(debtorObj);
+    setSettleCreditor(creditorObj);
+    setSettleAmount(amount || 0);
+    setShowSettleModal(true);
   };
 
   // Handler: Add or Edit Expense with Instant Optimistic UI & Offline Sync
@@ -1642,13 +2087,28 @@ export default function App() {
 
     if (isEditOperation && editingTx) {
       // 1. Edit existing transaction
+      const editorName = user?.displayName || user?.email?.split('@')[0] || 'Member';
+      const prevHistory = editingTx.editHistory || [];
+      const updatedHistory = [{
+        editedAt: nowIso,
+        editedBy: user?.uid,
+        editedByName: editorName,
+        previousAmount: editingTx.amount,
+        previousName: editingTx.name
+      }, ...prevHistory].slice(0, 20);
+
       const updatedTx: Transaction = {
         ...editingTx,
         name: data.name.trim(),
         amount: data.amount,
         category: data.category,
         date: data.date,
-        groupId: targetGroupId
+        groupId: targetGroupId,
+        lastEditedBy: user?.uid,
+        lastEditedByName: editorName,
+        lastEditedAt: nowIso,
+        editCount: (editingTx.editCount || 0) + 1,
+        editHistory: updatedHistory
       };
 
       // Instantly update state & persistent cache
@@ -1658,12 +2118,13 @@ export default function App() {
 
       // ONLY write to guest scratchpad if operating in guest/local mode
       if (isLocal) {
-        setLocalTransactions(prev => prev.map(t => t.id === editingTx.id ? updatedTx : t));
-        try {
-          localStorage.setItem('expenses_transactions', JSON.stringify(
-            localTransactions.map(t => t.id === editingTx.id ? updatedTx : t)
-          ));
-        } catch {}
+        setLocalTransactions(prev => {
+          const updated = prev.map(t => t.id === editingTx.id ? updatedTx : t);
+          try {
+            localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
       }
 
       if (isCloud && user) {
@@ -1675,7 +2136,12 @@ export default function App() {
             name: data.name.trim(),
             amount: data.amount,
             category: data.category,
-            date: data.date
+            date: data.date,
+            lastEditedBy: user.uid,
+            lastEditedByName: editorName,
+            lastEditedAt: nowIso,
+            editCount: updatedTx.editCount,
+            editHistory: updatedHistory
           }
         }, user.uid);
 
@@ -1718,10 +2184,13 @@ export default function App() {
 
       // ONLY write to guest scratchpad if operating in guest/local mode
       if (isLocal) {
-        setLocalTransactions(prev => [newTx, ...prev.filter(t => t.id !== newTxId)]);
-        try {
-          localStorage.setItem('expenses_transactions', JSON.stringify([newTx, ...localTransactions.filter(t => t.id !== newTxId)]));
-        } catch {}
+        setLocalTransactions(prev => {
+          const updated = [newTx, ...prev.filter(t => t.id !== newTxId)];
+          try {
+            localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
       }
 
       // Clean up converted shopping items immediately in state & cache
@@ -1789,23 +2258,348 @@ export default function App() {
     setEditingTx(null);
   };
 
-  // Handler: Delete Expense
-  const handleDeleteExpense = async (txId: string) => {
+  // Handler: Save Split Expense (Equal or Exact splits)
+  const handleSaveSplitExpense = async (data: {
+    name: string;
+    amount: number;
+    date: string;
+    paidBy: string;
+    paidByName: string;
+    splitMode: 'equal' | 'exact';
+    splitMembers: string[];
+    splits: Record<string, number>;
+    note?: string;
+  }) => {
+    const targetGroupId = activeGroup?.id || activeGroupId || (groups[0]?.id) || 'local_group';
+    const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
+    const isLocal = !isCloud;
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    const isEdit = Boolean(editingTx && editingTx.id && editingTx.id.trim().length > 0);
+    const targetId = isEdit ? editingTx!.id : `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const nowIso = new Date().toISOString();
+    const editorName = user?.displayName || user?.email?.split('@')[0] || 'Member';
+
+    const existingHistory = isEdit ? (editingTx?.editHistory || []) : [];
+    const newEditRecord = isEdit ? [{
+      editedAt: nowIso,
+      editedBy: user?.uid,
+      editedByName: editorName,
+      previousAmount: editingTx?.amount,
+      previousName: editingTx?.name
+    }, ...existingHistory].slice(0, 20) : undefined;
+
+    const splitTx: Transaction = {
+      ...(isEdit ? editingTx : {}),
+      id: targetId,
+      name: data.name,
+      amount: data.amount,
+      category: 'split',
+      date: data.date,
+      settled: isEdit ? (editingTx?.settled ?? false) : false,
+      groupId: targetGroupId,
+      createdBy: isEdit ? (editingTx?.createdBy || user?.uid || 'guest') : (user?.uid || 'guest'),
+      createdByName: isEdit ? (editingTx?.createdByName || editorName) : editorName,
+      paidBy: data.paidBy,
+      paidByName: data.paidByName,
+      splitMode: data.splitMode,
+      splitMembers: data.splitMembers,
+      splits: data.splits,
+      note: data.note,
+      createdAt: isEdit ? (editingTx?.createdAt || nowIso) : nowIso,
+      ...(isEdit ? {
+        lastEditedBy: user?.uid,
+        lastEditedByName: editorName,
+        lastEditedAt: nowIso,
+        editCount: (editingTx?.editCount || 0) + 1,
+        editHistory: newEditRecord
+      } : {})
+    };
+
+    // Optimistic update
+    if (isEdit) {
+      setTransactions(prev => prev.map(t => t.id === targetId ? splitTx : t));
+    } else {
+      setTransactions(prev => [splitTx, ...prev.filter(t => t.id !== targetId)]);
+    }
+
+    const currentCached = getCachedExpenses(targetGroupId);
+    setCachedExpenses(
+      targetGroupId,
+      isEdit 
+        ? currentCached.map(t => t.id === targetId ? splitTx : t)
+        : [splitTx, ...currentCached.filter(t => t.id !== targetId)]
+    );
+
+    if (isLocal) {
+      setLocalTransactions(prev => {
+        const updated = isEdit ? prev.map(t => t.id === targetId ? splitTx : t) : [splitTx, ...prev.filter(t => t.id !== targetId)];
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    }
+
+    if (isCloud && user) {
+      enqueueMutation({
+        type: isEdit ? 'UPDATE_EXPENSE' : 'ADD_EXPENSE',
+        groupId: targetGroupId,
+        targetId: targetId,
+        payload: splitTx
+      }, user.uid);
+
+      if (!isOffline) {
+        syncPendingMutations(user).catch(err => console.warn('Background sync note:', err));
+      }
+
+      if (activeGroup) {
+        dispatchSplitExpenseNotification(activeGroup, splitTx, user).catch(err => console.warn('Notification note:', err));
+      }
+    }
+
+    showToast({
+      message: isEdit ? 'Split bill updated' : `₹${data.amount.toLocaleString('en-IN')} split bill added`,
+      subMessage: `${data.name} · Paid by ${data.paidByName}`,
+      type: 'success'
+    });
+    setEditingTx(null);
+  };
+
+  // Handler: Update an existing split expense (for per-member settlement tracking)
+  const handleUpdateSplitTx = async (updatedTx: Transaction) => {
+    const targetGroupId = activeGroup?.id || activeGroupId || updatedTx.groupId || 'local_group';
+    const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
+    const isLocal = !isCloud;
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+    setTransactions(prev => prev.map(t => t.id === updatedTx.id ? updatedTx : t));
+    const currentCached = getCachedExpenses(targetGroupId);
+    setCachedExpenses(targetGroupId, currentCached.map(t => t.id === updatedTx.id ? updatedTx : t));
+
+    if (isLocal) {
+      setLocalTransactions(prev => {
+        const updated = prev.map(t => t.id === updatedTx.id ? updatedTx : t);
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    }
+
+    if (isCloud && user) {
+      enqueueMutation({
+        type: 'UPDATE_EXPENSE',
+        groupId: targetGroupId,
+        targetId: updatedTx.id,
+        payload: updatedTx
+      }, user.uid);
+
+      if (!isOffline) {
+        syncPendingMutations(user).catch(err => console.warn('Background sync note:', err));
+      }
+    }
+  };
+
+  const handleTriggerTestSplitNotification = async () => {
+    if (!activeGroup) return;
+    try {
+      await dispatchSettlementReminderNotification(
+        activeGroup,
+        'Group Members',
+        1450,
+        user
+      );
+      showToast({
+        message: 'Test settlement reminder dispatched',
+        subMessage: 'Checked real-time notifications',
+        type: 'info'
+      });
+    } catch {}
+  };
+
+  const handleOpenQuickSettle = (
+    debtor: { key: string; name: string },
+    creditor: { key: string; name: string },
+    amount: number
+  ) => {
+    setSettleDebtor(debtor);
+    setSettleCreditor(creditor);
+    setSettleAmount(amount);
+    setShowSettleModal(true);
+  };
+
+  const handleDirectRecordSettlement = async (
+    debtor: { key: string; name: string },
+    creditor: { key: string; name: string },
+    amount: number
+  ) => {
+    if (!activeGroup) return;
+    try {
+      const date = new Date().toISOString().split('T')[0];
+      const settlementTx = await recordSettlementPayment(
+        activeGroup.id,
+        debtor,
+        creditor,
+        amount,
+        date,
+        'Direct peer settlement',
+        user,
+        activeGroup
+      );
+
+      if (settlementTx) {
+        setTransactions(prev => [settlementTx, ...prev.filter(t => t.id !== settlementTx.id)]);
+        const currentCached = getCachedExpenses(activeGroup.id);
+        setCachedExpenses(activeGroup.id, [settlementTx, ...currentCached.filter(t => t.id !== settlementTx.id)]);
+      }
+
+      showToast({
+        message: `₹${amount.toLocaleString('en-IN')} marked as settled`,
+        subMessage: `${debtor.name} → ${creditor.name} · Open dues reconciled`,
+        type: 'success',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            if (settlementTx?.id) {
+              handleDeleteExpense(settlementTx.id, settlementTx);
+            }
+          }
+        }
+      });
+    } catch (err: any) {
+      showToast({
+        message: 'Failed to record settlement',
+        subMessage: err?.message || 'Please try again',
+        type: 'error'
+      });
+    }
+  };
+
+  // Handler: Delete Expense / Move to Trash (Split group: soft delete with 30-day retention)
+  const handleDeleteExpense = async (txId: string, explicitTargetTx?: Transaction) => {
     const targetGroupId = activeGroup?.id || activeGroupId || (groups[0]?.id) || 'local_group';
     const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
     const isLocal = !isCloud;
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
-    // Instantly remove from state & cache
+    const targetTx = explicitTargetTx || transactionsRef.current.find(t => t.id === txId) || transactions.find(t => t.id === txId);
+    if (!targetTx) return;
+
+    const isSplitGroup = activeGroup?.type === 'split' || targetTx.category === 'split' || Boolean(targetTx.splitMembers?.length) || Boolean(targetTx.isSettlement);
+    const nowIso = new Date().toISOString();
+    const deleterName = user?.displayName || user?.email?.split('@')[0] || 'Member';
+
+    if (isSplitGroup) {
+      // Split Group: Soft delete into Trash (kept for 30 days with full restore ability)
+      const softDeletedTx: Transaction = {
+        ...targetTx,
+        isDeleted: true,
+        deletedAt: nowIso,
+        deletedBy: user?.uid || 'guest',
+        deletedByName: deleterName,
+        deletedReason: 'Deleted by member'
+      };
+
+      // 1. Prepare base transaction list with the soft-deleted transaction
+      const currentTxs = transactionsRef.current;
+      let updatedTransactionsList = currentTxs.some(t => t.id === txId)
+        ? currentTxs.map(t => t.id === txId ? softDeletedTx : t)
+        : [softDeletedTx, ...currentTxs.filter(t => t.id !== txId)];
+
+      // 2. If deleting a settlement transaction, synchronously revert all settled expenses in memory immediately
+      if (targetTx.isSettlement) {
+        const payerKey = targetTx.paidBy || '';
+        const receiverKey = targetTx.settledTo || '';
+        const defaultMembers = activeGroup 
+          ? getGroupMembersList(activeGroup, user?.uid, user?.email || undefined).map(m => m.key)
+          : [];
+
+        updatedTransactionsList = updatedTransactionsList.map(t => {
+          if (t.isSettlement || t.isDeleted) return t;
+          const txPayer = t.paidBy || t.createdBy || '';
+          const isReceiverPayer = matchMemberKeys(txPayer, receiverKey, activeGroup || undefined, user?.uid, user?.email || undefined);
+          const participants = t.splitMembers && t.splitMembers.length > 0 ? t.splitMembers : defaultMembers;
+          const isPayerParticipant = participants.some(p => matchMemberKeys(p, payerKey, activeGroup || undefined, user?.uid, user?.email || undefined));
+
+          if (isReceiverPayer && isPayerParticipant) {
+            const currentSettled = t.settledMembers || [];
+            const newSettled = currentSettled.filter(k => !matchMemberKeys(k, payerKey, activeGroup || undefined, user?.uid, user?.email || undefined));
+            return {
+              ...t,
+              settledMembers: newSettled,
+              settled: false,
+              note: t.note?.toLowerCase().trim() === 'settled' ? '' : (t.note || '')
+            };
+          }
+          return t;
+        });
+      }
+
+      setTransactions(updatedTransactionsList);
+      const currentCached = getCachedExpenses(targetGroupId);
+      setCachedExpenses(targetGroupId, updatedTransactionsList);
+
+      if (isLocal) {
+        setLocalTransactions(updatedTransactionsList);
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updatedTransactionsList));
+        } catch {}
+      }
+
+      if (isCloud && user) {
+        enqueueMutation({
+          type: 'UPDATE_EXPENSE',
+          groupId: targetGroupId,
+          targetId: txId,
+          payload: {
+            isDeleted: true,
+            deletedAt: nowIso,
+            deletedBy: user.uid,
+            deletedByName: deleterName,
+            deletedReason: 'Deleted by member'
+          }
+        }, user.uid);
+
+        if (!isOffline) {
+          syncPendingMutations(user).catch(err => console.warn('Background sync note:', err));
+        }
+      }
+
+      // 3. Asynchronously persist reverted expense statuses to Firestore in background
+      if (targetTx.isSettlement) {
+        revertSettlementOnExpenses(
+          targetGroupId,
+          targetTx,
+          activeGroup || undefined,
+          user?.uid,
+          user?.email || undefined,
+          transactions
+        ).catch(err => console.warn('Revert expenses note:', err));
+      }
+
+      showToast({
+        message: targetTx.isSettlement 
+          ? 'Settlement undone · Debts reopened' 
+          : 'Moved to Trash · Kept for 30 days',
+        subMessage: `${targetTx.name} (₹${targetTx.amount.toLocaleString('en-IN')})`,
+        type: 'info'
+      });
+      return;
+    }
+
+    // Standard Non-Split Expense: permanent deletion
     setTransactions(prev => prev.filter(t => t.id !== txId));
     const currentCached = getCachedExpenses(targetGroupId);
     setCachedExpenses(targetGroupId, currentCached.filter(t => t.id !== txId));
 
     if (isLocal) {
-      setLocalTransactions(prev => prev.filter(t => t.id !== txId));
-      try {
-        localStorage.setItem('expenses_transactions', JSON.stringify(localTransactions.filter(t => t.id !== txId)));
-      } catch {}
+      setLocalTransactions(prev => {
+        const updated = prev.filter(t => t.id !== txId);
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
     }
 
     if (isCloud && user) {
@@ -1821,10 +2615,148 @@ export default function App() {
       }
     }
 
-    setToastMessage(isOffline ? 'Deleted offline · Saved on device' : 'Expense deleted');
+    showToast({
+      message: isOffline ? 'Deleted offline · Saved on device' : 'Expense deleted',
+      subMessage: `${targetTx.name} (₹${targetTx.amount.toLocaleString('en-IN')})`,
+      type: 'info'
+    });
   };
 
-  // Handler: Settle Expense
+  // Handler: Restore a soft-deleted split transaction from Trash
+  const handleRestoreExpense = async (txId: string) => {
+    const targetGroupId = activeGroup?.id || activeGroupId || (groups[0]?.id) || 'local_group';
+    const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
+    const isLocal = !isCloud;
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+    const targetTx = transactions.find(t => t.id === txId);
+    if (!targetTx) return;
+
+    // Financial Integrity Check: If restoring a settlement, verify that the debt has not already been settled or superseded
+    if (targetTx.isSettlement) {
+      const validation = validateSettlementRestore(
+        targetTx,
+        transactions,
+        activeGroup || undefined,
+        user?.uid,
+        user?.email || undefined
+      );
+      if (!validation.canRestore) {
+        showToast({
+          message: validation.title,
+          subMessage: validation.message,
+          type: 'ledger',
+          duration: 5000
+        });
+        return;
+      }
+    }
+
+    const restoredTx: Transaction = {
+      ...targetTx,
+      isDeleted: false,
+      deletedAt: undefined,
+      deletedBy: undefined,
+      deletedByName: undefined,
+      deletedReason: undefined
+    };
+
+    setTransactions(prev => prev.map(t => t.id === txId ? restoredTx : t));
+    const currentCached = getCachedExpenses(targetGroupId);
+    setCachedExpenses(targetGroupId, currentCached.map(t => t.id === txId ? restoredTx : t));
+
+    if (isLocal) {
+      setLocalTransactions(prev => {
+        const updated = prev.map(t => t.id === txId ? restoredTx : t);
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    }
+
+    if (isCloud && user) {
+      enqueueMutation({
+        type: 'UPDATE_EXPENSE',
+        groupId: targetGroupId,
+        targetId: txId,
+        payload: {
+          isDeleted: false,
+          deletedAt: null,
+          deletedBy: null,
+          deletedByName: null,
+          deletedReason: null
+        }
+      }, user.uid);
+
+      if (!isOffline) {
+        syncPendingMutations(user).catch(err => console.warn('Background sync note:', err));
+      }
+    }
+
+    // If restoring a settlement transaction, re-apply settlement to member expenses
+    if (targetTx.isSettlement && targetTx.paidBy && targetTx.settledTo) {
+      autoSettleMemberExpenses(
+        targetGroupId,
+        targetTx.paidBy,
+        targetTx.settledTo,
+        activeGroup || undefined,
+        user?.uid,
+        user?.email || undefined
+      ).catch(err => console.warn('Restore settlement note:', err));
+    }
+
+    showToast({
+      message: 'Restored from Trash',
+      subMessage: `${targetTx.name} (₹${targetTx.amount.toLocaleString('en-IN')})`,
+      type: 'success'
+    });
+  };
+
+  // Handler: Permanently delete transaction from Trash
+  const handlePermanentDeleteExpense = async (txId: string) => {
+    const targetGroupId = activeGroup?.id || activeGroupId || (groups[0]?.id) || 'local_group';
+    const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
+    const isLocal = !isCloud;
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+    const targetTx = transactions.find(t => t.id === txId);
+
+    setTransactions(prev => prev.filter(t => t.id !== txId));
+    const currentCached = getCachedExpenses(targetGroupId);
+    setCachedExpenses(targetGroupId, currentCached.filter(t => t.id !== txId));
+
+    if (isLocal) {
+      setLocalTransactions(prev => {
+        const updated = prev.filter(t => t.id !== txId);
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    }
+
+    if (isCloud && user) {
+      enqueueMutation({
+        type: 'DELETE_EXPENSE',
+        groupId: targetGroupId,
+        targetId: txId,
+        payload: {}
+      }, user.uid);
+
+      if (!isOffline) {
+        syncPendingMutations(user).catch(err => console.warn('Background sync note:', err));
+      }
+    }
+
+    showToast({
+      message: 'Permanently deleted',
+      subMessage: targetTx ? `${targetTx.name} (₹${targetTx.amount.toLocaleString('en-IN')})` : undefined,
+      type: 'info'
+    });
+  };
+
+  // Handler: Settle Expense (Mark as Refunded / Returned)
   const handleSaveSettlement = async (refundAmount: number, note: string) => {
     if (!settleTx) return;
     const targetGroupId = activeGroup?.id || activeGroupId || settleTx.groupId || 'local_group';
@@ -1832,13 +2764,14 @@ export default function App() {
     const isLocal = !isCloud;
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const netAmount = Math.max(0, settleTx.amount - refundAmount);
+    const isFullRefund = refundAmount >= settleTx.amount;
 
     const updatedTx: Transaction = {
       ...settleTx,
       settled: true,
       originalAmount: settleTx.originalAmount || settleTx.amount,
       amount: netAmount,
-      note: note || 'Settled with refund/discount'
+      note: note || 'Refunded / Returned'
     };
 
     setTransactions(prev => prev.map(t => t.id === settleTx.id ? updatedTx : t));
@@ -1846,10 +2779,13 @@ export default function App() {
     setCachedExpenses(targetGroupId, currentCached.map(t => t.id === settleTx.id ? updatedTx : t));
 
     if (isLocal) {
-      setLocalTransactions(prev => prev.map(t => t.id === settleTx.id ? updatedTx : t));
-      try {
-        localStorage.setItem('expenses_transactions', JSON.stringify(localTransactions.map(t => t.id === settleTx.id ? updatedTx : t)));
-      } catch {}
+      setLocalTransactions(prev => {
+        const updated = prev.map(t => t.id === settleTx.id ? updatedTx : t);
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
     }
 
     if (isCloud && user) {
@@ -1871,14 +2807,19 @@ export default function App() {
     }
 
     showToast({
-      message: isOffline ? 'Settled offline · Saved on device' : 'Expense marked as settled',
-      subMessage: 'Balances updated',
+      message: isOffline ? 'Saved offline · Saved on device' : (isFullRefund ? 'Expense marked as fully refunded' : 'Partial refund recorded'),
+      subMessage: isFullRefund ? '₹0 balance remaining in ledger' : `₹${netAmount.toLocaleString('en-IN')} remaining in ledger`,
       type: 'success'
     });
   };
 
-  // Handler: Undo Settle Expense
+  // Handler: Undo Settle / Undo Refund Expense or Undo Settlement Payment
   const handleUndoSettle = async (tx: Transaction) => {
+    if (tx.isSettlement) {
+      await handleDeleteExpense(tx.id);
+      return;
+    }
+
     const targetGroupId = activeGroup?.id || activeGroupId || tx.groupId || 'local_group';
     const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
     const isLocal = !isCloud;
@@ -1887,8 +2828,9 @@ export default function App() {
     const restoredTx: Transaction = {
       ...tx,
       settled: false,
+      settledMembers: [],
       amount: tx.originalAmount || tx.amount,
-      note: ''
+      note: (tx.note?.toLowerCase().trim() === 'settled' || tx.note?.toLowerCase().trim() === 'refunded / returned' || tx.note?.toLowerCase().trim() === 'full refund' || tx.note?.toLowerCase().trim() === '50% refund') ? '' : (tx.note || '')
     };
 
     setTransactions(prev => prev.map(t => t.id === tx.id ? restoredTx : t));
@@ -1896,10 +2838,13 @@ export default function App() {
     setCachedExpenses(targetGroupId, currentCached.map(t => t.id === tx.id ? restoredTx : t));
 
     if (isLocal) {
-      setLocalTransactions(prev => prev.map(t => t.id === tx.id ? restoredTx : t));
-      try {
-        localStorage.setItem('expenses_transactions', JSON.stringify(localTransactions.map(t => t.id === tx.id ? restoredTx : t)));
-      } catch {}
+      setLocalTransactions(prev => {
+        const updated = prev.map(t => t.id === tx.id ? restoredTx : t);
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
     }
 
     if (isCloud && user) {
@@ -1909,8 +2854,9 @@ export default function App() {
         targetId: tx.id,
         payload: {
           settled: false,
+          settledMembers: [],
           amount: restoredTx.amount,
-          note: ''
+          note: restoredTx.note
         }
       }, user.uid);
 
@@ -1920,9 +2866,64 @@ export default function App() {
     }
 
     showToast({
-      message: 'Settlement restored',
-      subMessage: 'Original expense amount restored',
+      message: 'Refund undone · Expense restored',
+      subMessage: `₹${restoredTx.amount.toLocaleString('en-IN')} active in ledger`,
       type: 'info'
+    });
+  };
+
+  // Handler: Quick Settle Expense (1-tap toggle to settled)
+  const handleQuickSettle = async (tx: Transaction) => {
+    const targetGroupId = activeGroup?.id || activeGroupId || tx.groupId || 'local_group';
+    const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
+    const isLocal = !isCloud;
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+    const allMembers = tx.splitMembers && tx.splitMembers.length > 0 ? tx.splitMembers : [];
+    const updatedTx: Transaction = {
+      ...tx,
+      settled: true,
+      settledMembers: allMembers,
+      originalAmount: tx.originalAmount || tx.amount,
+      note: tx.note || ''
+    };
+
+    setTransactions(prev => prev.map(t => t.id === tx.id ? updatedTx : t));
+    const currentCached = getCachedExpenses(targetGroupId);
+    setCachedExpenses(targetGroupId, currentCached.map(t => t.id === tx.id ? updatedTx : t));
+
+    if (isLocal) {
+      setLocalTransactions(prev => {
+        const updated = prev.map(t => t.id === tx.id ? updatedTx : t);
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    }
+
+    if (isCloud && user) {
+      enqueueMutation({
+        type: 'SETTLE_EXPENSE',
+        groupId: targetGroupId,
+        targetId: tx.id,
+        payload: {
+          settled: true,
+          originalAmount: updatedTx.originalAmount,
+          amount: updatedTx.amount,
+          note: updatedTx.note
+        }
+      }, user.uid);
+
+      if (!isOffline) {
+        syncPendingMutations(user).catch(err => console.warn('Background sync note:', err));
+      }
+    }
+
+    showToast({
+      message: 'Expense marked as settled',
+      subMessage: 'Status changed to settled',
+      type: 'success'
     });
   };
 
@@ -2672,6 +3673,51 @@ export default function App() {
     );
   }
 
+  // Show Landing Page for unauthenticated visitors
+  if (!user && !guestMode) {
+    return (
+      <>
+        <LandingPage
+          onSignIn={async () => {
+            try {
+              await signInWithGoogle();
+            } catch (err) {
+              console.warn(err);
+            }
+          }}
+          onExploreGuest={() => setGuestMode(true)}
+          onOpenJoin={() => setShowJoinModal(true)}
+          themeMode={themeMode}
+          darkMode={resolvedDarkMode}
+          onCycleThemeMode={handleCycleTheme}
+          onToggleDarkMode={handleCycleTheme}
+        />
+
+        <JoinGroupModal
+          isOpen={showJoinModal}
+          groups={groups}
+          onClose={() => {
+            setShowJoinModal(false);
+            setInitialJoinCode('');
+          }}
+          onJoined={(groupId, groupName) => {
+            setGuestMode(true);
+            handleSelectGroup(groupId);
+            setShowJoinModal(false);
+            setInitialJoinCode('');
+            showToast({
+              message: groupName ? `Joined "${groupName}"` : 'Joined shared ledger',
+              subMessage: 'Joined with View Only access • Admin can grant Can Edit permissions',
+              type: 'ledger',
+              duration: 3500
+            });
+          }}
+          initialCode={initialJoinCode}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="h-[100dvh] max-h-[100dvh] w-full bg-bg-main text-text-primary flex flex-col font-sans selection:bg-google-blue/20 selection:text-google-blue overflow-hidden">
       {/* Top Navbar */}
@@ -2681,7 +3727,9 @@ export default function App() {
         userRole={userRole}
         onOpenGroupModal={handleOpenGroupModal}
         onOpenJoinModal={() => setShowJoinModal(true)}
+        onOpenInviteModal={() => setShowInviteModal(true)}
         onSelectGroup={handleSelectGroup}
+        onShowToast={showToast}
         isOnline={isOnline}
         isSyncing={isSyncing}
         pendingSyncCount={pendingSyncCount}
@@ -2696,6 +3744,7 @@ export default function App() {
         onDeleteNotification={handleDeleteNotification}
         onSelectNotification={handleSelectNotification}
         onTriggerTestDailyDigest={() => handleTriggerDailyDigest(true)}
+        onTriggerTestSplitNotification={handleTriggerTestSplitNotification}
         pushPermission={pushPermission}
         onRequestPushPermission={handleRequestPushPermission}
         digestTime={digestTime}
@@ -2705,107 +3754,198 @@ export default function App() {
 
       {/* Main Tab Content */}
       <main className="flex-1 w-full max-w-3xl mx-auto px-3 sm:px-6 md:px-8 py-3.5 sm:py-5 overflow-y-auto overscroll-contain no-scrollbar">
-        {activeTab === 'Overview' && (
-          <OverviewTab
-            transactions={transactions}
-            categories={categories}
-            selectedPeriod={selectedPeriod}
-            onSelectPeriod={setSelectedPeriod}
-            showPeriodDropdown={showPeriodDropdown}
-            setShowPeriodDropdown={setShowPeriodDropdown}
-            userRole={userRole}
-            onOpenAddExpense={() => { setEditingTx(null); setShowExpenseModal(true); }}
-            onEditExpense={(tx) => { setEditingTx(tx); setShowExpenseModal(true); }}
-            onDeleteExpense={handleDeleteExpense}
-            onSettleExpense={(tx) => setSettleTx(tx)}
-            onUndoSettleExpense={handleUndoSettle}
-            groupName={activeGroup?.name || 'Group'}
-            onNavigateToTransactions={() => setActiveTab('Transactions')}
-          />
-        )}
+        {activeGroup?.type === 'split' ? (
+          /* Split / Contri Ledger Views */
+          (activeTab === 'Individual' || activeTab === 'Transactions') ? (
+            <SplitIndividualView
+              group={activeGroup}
+              transactions={transactions}
+              userRole={userRole}
+              onOpenSettleModal={handleOpenSettleModal}
+              onRecordSettlement={handleDirectRecordSettlement}
+              onOpenInviteModal={() => setShowInviteModal(true)}
+              onOpenAddExpense={() => {
+                setEditingTx(null);
+                setShowSplitExpenseModal(true);
+              }}
+              onShowToast={showToast}
+            />
+          ) : activeTab === 'Settings' ? (
+            <SettingsTab
+              themeMode={themeMode}
+              onSelectThemeMode={setThemeMode}
+              darkMode={resolvedDarkMode}
+              onToggleDarkMode={handleCycleTheme}
+              activeGroup={activeGroup}
+              groups={groups}
+              userRole={userRole}
+              onOpenGroupModal={handleOpenGroupModal}
+              onOpenCategoryModal={(tab = 'manage') => {
+                setCategoryModalTab(tab);
+                setShowCategoryModal(true);
+              }}
+              onDeleteCategory={handleDeleteCategory}
+              categories={categories}
+              transactions={transactions}
+              shoppingItems={shoppingItems}
+              recurringExpenses={recurringExpenses}
+              onSyncLocalData={handleSyncLocalData}
+              hasLocalData={hasLocalData}
+              onOpenMergeModal={() => { if (hasLocalData) setShowMergeModal(true); }}
+              pushPermission={pushPermission}
+              onRequestPushPermission={handleRequestPushPermission}
+              onTriggerTestDailyDigest={() => handleTriggerDailyDigest(true)}
+              digestTime={digestTime}
+              onChangeDigestTime={handleUpdateDigestTime}
+              onOpenOnboarding={() => setShowOnboardingModal(true)}
+              onOpenDeleteAccount={() => setShowDeleteAccountModal(true)}
+              onResetLocalData={() => setShowResetDataModal(true)}
+              isStandalone={isStandalone}
+              onOpenInstallModal={() => setShowInstallModal(true)}
+              onOpenJoinModal={() => setShowJoinModal(true)}
+              onOpenProfileSetup={() => setShowProfileSetupModal(true)}
+              pendingSyncCount={pendingSyncCount}
+              geminiEnabled={false}
+              onToggleGemini={handleToggleGemini}
+              onOpenInviteModal={() => setShowInviteModal(true)}
+              onTriggerTestSplitNotification={handleTriggerTestSplitNotification}
+            />
+          ) : (
+            /* Default for split ledger: Group View */
+            <SplitGroupView
+              group={activeGroup}
+              transactions={transactions}
+              userRole={userRole}
+              onOpenAddExpense={() => {
+                setEditingTx(null);
+                setShowSplitExpenseModal(true);
+              }}
+              onEditExpense={(tx) => {
+                if (tx.isSettlement) return;
+                setEditingTx(tx);
+                setShowSplitExpenseModal(true);
+              }}
+              onDeleteExpense={handleDeleteExpense}
+              onRestoreExpense={handleRestoreExpense}
+              onPermanentDeleteExpense={handlePermanentDeleteExpense}
+              onOpenInviteModal={() => setShowInviteModal(true)}
+              onShowToast={showToast}
+              onUndoSettleExpense={handleUndoSettle}
+              onUpdateExpense={handleUpdateSplitTx}
+            />
+          )
+        ) : (
+          /* Shared Budget Ledger Views (100% Unchanged) */
+          <>
+            {activeTab === 'Overview' && (
+              <OverviewTab
+                transactions={activeTransactions}
+                categories={categories}
+                selectedPeriod={selectedPeriod}
+                onSelectPeriod={setSelectedPeriod}
+                showPeriodDropdown={showPeriodDropdown}
+                setShowPeriodDropdown={setShowPeriodDropdown}
+                userRole={userRole}
+                onOpenAddExpense={() => { setEditingTx(null); setShowExpenseModal(true); }}
+                onEditExpense={(tx) => { setEditingTx(tx); setShowExpenseModal(true); }}
+                onDeleteExpense={handleDeleteExpense}
+                onSettleExpense={(tx) => setSettleTx(tx)}
+                onUndoSettleExpense={handleUndoSettle}
+                groupName={activeGroup?.name || 'Group'}
+                onNavigateToTransactions={() => setActiveTab('Transactions')}
+                geminiEnabled={effectiveGeminiEnabled}
+              />
+            )}
 
-        {activeTab === 'Transactions' && (
-          <TransactionsTab
-            transactions={transactions}
-            categories={categories}
-            userRole={userRole}
-            onOpenAddExpense={() => { setEditingTx(null); setShowExpenseModal(true); }}
-            onEditExpense={(tx) => { setEditingTx(tx); setShowExpenseModal(true); }}
-            onDeleteExpense={handleDeleteExpense}
-            onSettleExpense={(tx) => setSettleTx(tx)}
-            onUndoSettleExpense={handleUndoSettle}
-            groupName={activeGroup?.name || 'Group'}
-          />
-        )}
+            {activeTab === 'Transactions' && (
+              <TransactionsTab
+                transactions={activeTransactions}
+                categories={categories}
+                userRole={userRole}
+                onOpenAddExpense={() => { setEditingTx(null); setShowExpenseModal(true); }}
+                onEditExpense={(tx) => { setEditingTx(tx); setShowExpenseModal(true); }}
+                onDeleteExpense={handleDeleteExpense}
+                onSettleExpense={(tx) => setSettleTx(tx)}
+                onUndoSettleExpense={handleUndoSettle}
+                groupName={activeGroup?.name || 'Group'}
+              />
+            )}
 
-        {activeTab === 'Lists' && (
-          <ShoppingTab
-            items={shoppingItems}
-            categories={categories}
-            userRole={userRole}
-            onAddItem={handleAddShoppingItem}
-            onUpdateItem={handleUpdateShoppingItem}
-            onToggleItem={handleToggleShoppingItem}
-            onDeleteItem={handleDeleteShoppingItem}
-            onConvertBoughtToExpense={handleConvertBoughtToExpense}
-            groupName={activeGroup?.name || 'Group'}
-          />
-        )}
+            {activeTab === 'Lists' && (
+              <ShoppingTab
+                items={shoppingItems}
+                categories={categories}
+                userRole={userRole}
+                onAddItem={handleAddShoppingItem}
+                onUpdateItem={handleUpdateShoppingItem}
+                onToggleItem={handleToggleShoppingItem}
+                onDeleteItem={handleDeleteShoppingItem}
+                onConvertBoughtToExpense={handleConvertBoughtToExpense}
+                groupName={activeGroup?.name || 'Group'}
+              />
+            )}
 
-        {activeTab === 'Fixed' && (
-          <FixedTab
-            recurringExpenses={recurringExpenses}
-            categories={categories}
-            userRole={userRole}
-            onOpenAddRecurring={() => {
-              setEditingRecurring(null);
-              setShowRecurringModal(true);
-            }}
-            onEditRecurring={(rec) => {
-              setEditingRecurring(rec);
-              setShowRecurringModal(true);
-            }}
-            onToggleStatus={handleToggleRecurringStatus}
-            onDeleteRecurring={handleDeleteRecurring}
-            groupName={activeGroup?.name || 'Group'}
-          />
-        )}
+            {activeTab === 'Fixed' && (
+              <FixedTab
+                recurringExpenses={recurringExpenses}
+                categories={categories}
+                userRole={userRole}
+                onOpenAddRecurring={() => {
+                  setEditingRecurring(null);
+                  setShowRecurringModal(true);
+                }}
+                onEditRecurring={(rec) => {
+                  setEditingRecurring(rec);
+                  setShowRecurringModal(true);
+                }}
+                onToggleStatus={handleToggleRecurringStatus}
+                onDeleteRecurring={handleDeleteRecurring}
+                groupName={activeGroup?.name || 'Group'}
+              />
+            )}
 
-        {activeTab === 'Settings' && (
-          <SettingsTab
-            themeMode={themeMode}
-            onSelectThemeMode={setThemeMode}
-            darkMode={resolvedDarkMode}
-            onToggleDarkMode={handleCycleTheme}
-            activeGroup={activeGroup}
-            groups={groups}
-            userRole={userRole}
-            onOpenGroupModal={handleOpenGroupModal}
-            onOpenCategoryModal={(tab = 'manage') => {
-              setCategoryModalTab(tab);
-              setShowCategoryModal(true);
-            }}
-            onDeleteCategory={handleDeleteCategory}
-            categories={categories}
-            transactions={transactions}
-            shoppingItems={shoppingItems}
-            recurringExpenses={recurringExpenses}
-            onSyncLocalData={handleSyncLocalData}
-            hasLocalData={hasLocalData}
-            onOpenMergeModal={() => { if (hasLocalData) setShowMergeModal(true); }}
-            pushPermission={pushPermission}
-            onRequestPushPermission={handleRequestPushPermission}
-            onTriggerTestDailyDigest={() => handleTriggerDailyDigest(true)}
-            digestTime={digestTime}
-            onChangeDigestTime={handleUpdateDigestTime}
-            onOpenOnboarding={() => setShowOnboardingModal(true)}
-            onOpenDeleteAccount={() => setShowDeleteAccountModal(true)}
-            onResetLocalData={() => setShowResetDataModal(true)}
-            isStandalone={isStandalone}
-            onOpenInstallModal={() => setShowInstallModal(true)}
-            onOpenJoinModal={() => setShowJoinModal(true)}
-            pendingSyncCount={pendingSyncCount}
-          />
+            {activeTab === 'Settings' && (
+              <SettingsTab
+                themeMode={themeMode}
+                onSelectThemeMode={setThemeMode}
+                darkMode={resolvedDarkMode}
+                onToggleDarkMode={handleCycleTheme}
+                activeGroup={activeGroup}
+                groups={groups}
+                userRole={userRole}
+                onOpenGroupModal={handleOpenGroupModal}
+                onOpenCategoryModal={(tab = 'manage') => {
+                  setCategoryModalTab(tab);
+                  setShowCategoryModal(true);
+                }}
+                onDeleteCategory={handleDeleteCategory}
+                categories={categories}
+                transactions={transactions}
+                shoppingItems={shoppingItems}
+                recurringExpenses={recurringExpenses}
+                onSyncLocalData={handleSyncLocalData}
+                hasLocalData={hasLocalData}
+                onOpenMergeModal={() => { if (hasLocalData) setShowMergeModal(true); }}
+                pushPermission={pushPermission}
+                onRequestPushPermission={handleRequestPushPermission}
+                onTriggerTestDailyDigest={() => handleTriggerDailyDigest(true)}
+                digestTime={digestTime}
+                onChangeDigestTime={handleUpdateDigestTime}
+                onOpenOnboarding={() => setShowOnboardingModal(true)}
+                onOpenDeleteAccount={() => setShowDeleteAccountModal(true)}
+                onResetLocalData={() => setShowResetDataModal(true)}
+                isStandalone={isStandalone}
+                onOpenInstallModal={() => setShowInstallModal(true)}
+                onOpenJoinModal={() => setShowJoinModal(true)}
+                onOpenProfileSetup={() => setShowProfileSetupModal(true)}
+                pendingSyncCount={pendingSyncCount}
+                geminiEnabled={effectiveGeminiEnabled}
+                onToggleGemini={handleToggleGemini}
+                onOpenInviteModal={() => setShowInviteModal(true)}
+                onTriggerTestSplitNotification={handleTriggerTestSplitNotification}
+              />
+            )}
+          </>
         )}
       </main>
 
@@ -2821,6 +3961,7 @@ export default function App() {
         onCreateGroup={handleCreateNewGroup}
         onDeleteGroup={handleDeleteGroup}
         onOpenJoinModal={() => setShowJoinModal(true)}
+        onOpenInviteModal={() => setShowInviteModal(true)}
       />
 
       <JoinGroupModal
@@ -2883,6 +4024,125 @@ export default function App() {
         activeGroupId={activeGroup?.id || ''}
         userRole={userRole}
         initialTx={editingTx}
+      />
+
+      {activeGroup && (
+        <SplitExpenseModal
+          isOpen={showSplitExpenseModal}
+          onClose={() => {
+            setShowSplitExpenseModal(false);
+            setEditingTx(null);
+          }}
+          group={activeGroup}
+          userRole={userRole}
+          initialTx={editingTx}
+          onOpenInviteModal={() => setShowInviteModal(true)}
+          onAddDirectMember={async (nameOrEmail) => {
+            const updated = await addDirectMemberToGroup(activeGroup, nameOrEmail, 'editor');
+            setGroups(prev => prev.map(g => g.id === updated.id ? updated : g));
+          }}
+          onSave={handleSaveSplitExpense}
+        />
+      )}
+
+      {activeGroup && (
+        <InviteMemberModal
+          isOpen={showInviteModal}
+          onClose={() => setShowInviteModal(false)}
+          group={activeGroup}
+          userRole={userRole}
+          onAddDirectMember={async (nameOrEmail) => {
+            const updated = await addDirectMemberToGroup(activeGroup, nameOrEmail, 'editor');
+            setGroups(prev => prev.map(g => g.id === updated.id ? updated : g));
+          }}
+        />
+      )}
+
+      {activeGroup && showSettleModal && settleDebtor && settleCreditor && (
+        <QuickSettleModal
+          isOpen={showSettleModal}
+          onClose={() => {
+            setShowSettleModal(false);
+            setSettleDebtor(null);
+            setSettleCreditor(null);
+          }}
+          group={activeGroup}
+          userRole={userRole}
+          debtor={settleDebtor}
+          creditor={settleCreditor}
+          suggestedAmount={settleAmount}
+          onPaymentRecorded={() => {
+            const debtorKey = (settleDebtor?.key || '').toLowerCase().trim();
+            const creditorKey = (settleCreditor?.key || '').toLowerCase().trim();
+
+            // Automatically club and settle the debtor's due on any open expenses where creditor was payer
+            if (debtorKey && creditorKey) {
+              setTransactions(prev => {
+                return prev.map(t => {
+                  if (t.isSettlement) return t;
+                  const payer = (t.paidBy || t.createdBy || '').toLowerCase().trim();
+                  const participants = (t.splitMembers || []).map(p => p.toLowerCase().trim());
+
+                  if (payer === creditorKey && participants.includes(debtorKey)) {
+                    const currentSettled = t.settledMembers || [];
+                    const alreadySettled = currentSettled.some(k => k.toLowerCase().trim() === debtorKey);
+                    const newSettled = alreadySettled ? currentSettled : [...currentSettled, settleDebtor!.key];
+                    const nonPayers = participants.filter(p => p !== payer);
+                    const allDone = nonPayers.length > 0 && nonPayers.every(p => 
+                      newSettled.some(k => k.toLowerCase().trim() === p)
+                    );
+
+                    const updatedTx: Transaction = {
+                      ...t,
+                      settledMembers: newSettled,
+                      settled: allDone ? true : t.settled
+                    };
+                    handleUpdateSplitTx(updatedTx);
+                    return updatedTx;
+                  }
+                  return t;
+                });
+              });
+            }
+
+            const isLocal = !user || activeGroup.id.startsWith('local_') || activeGroup.id === 'local_group';
+            if (isLocal) {
+              try {
+                const saved = localStorage.getItem('expenses_transactions');
+                if (saved) {
+                  const list = JSON.parse(saved);
+                  setLocalTransactions(list);
+                }
+              } catch {}
+            }
+            if (activeGroup && settleDebtor && settleCreditor && user) {
+              const canonicalDebtorName = getCanonicalMemberName(settleDebtor.key, activeGroup, user?.uid, user?.email || undefined, user);
+              const canonicalCreditorName = getCanonicalMemberName(settleCreditor.key, activeGroup, user?.uid, user?.email || undefined, user);
+
+              dispatchSettlementNotification(activeGroup, {
+                amount: settleAmount,
+                paidByName: canonicalDebtorName,
+                settledToName: canonicalCreditorName
+              }, user).catch(err => console.warn('Settlement notification note:', err));
+            }
+            showToast({
+              message: 'Settlement recorded & expense completed',
+              subMessage: 'Dues automatically resolved against expense',
+              type: 'success'
+            });
+          }}
+        />
+      )}
+
+      <VoiceInputModal
+        isOpen={showVoiceModal && userRole !== 'viewer'}
+        onClose={() => setShowVoiceModal(false)}
+        activeGroup={activeGroup}
+        userRole={userRole}
+        categories={categories}
+        onSaveExpense={handleSaveExpense}
+        onAddShoppingItem={handleAddShoppingItem}
+        isOnline={isOnline}
       />
 
       <SettleModal
@@ -2949,6 +4209,13 @@ export default function App() {
         }}
       />
 
+      {/* Post-Sign In Profile Completion (Full Name & UPI ID) */}
+      <ProfileSetupModal
+        isOpen={showProfileSetupModal && Boolean(user)}
+        user={user}
+        onComplete={handleCompleteProfileSetup}
+      />
+
       {/* Delete Account Modal (Apple HIG & Google M3 Irreversible Action Sheet) */}
       <DeleteAccountModal
         isOpen={showDeleteAccountModal}
@@ -3004,7 +4271,11 @@ export default function App() {
         toast={toast}
         onDismiss={handleDismissToast}
         categories={categories}
-        hasFab={userRole !== 'viewer' && (activeTab === 'Overview' || activeTab === 'Transactions')}
+        hasFab={userRole !== 'viewer' && (
+          isSplitLedger
+            ? (activeTab === 'Group' || activeTab === 'Individual' || activeTab === 'Overview' || activeTab === 'Transactions')
+            : (activeTab === 'Overview' || activeTab === 'Transactions')
+        )}
       />
 
       {/* Ledger Deep Link Context Switch Modal */}
@@ -3046,51 +4317,140 @@ export default function App() {
       )}
 
       {/* Material 3 Floating Action Button (FAB) */}
-      {userRole !== 'viewer' && (activeTab === 'Overview' || activeTab === 'Transactions') && (
+      {userRole !== 'viewer' && (
+        isSplitLedger
+          ? (activeTab === 'Group' || activeTab === 'Individual' || activeTab === 'Overview' || activeTab === 'Transactions')
+          : (activeTab === 'Overview' || activeTab === 'Transactions')
+      ) && (
         <button
           type="button"
-          onClick={() => { setEditingTx(null); setShowExpenseModal(true); }}
+          onClick={() => { 
+            if (isSplitLedger) {
+              setEditingTx(null); 
+              setShowSplitExpenseModal(true);
+            } else {
+              setEditingTx(null); 
+              setShowExpenseModal(true);
+            }
+          }}
           className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] sm:bottom-20 right-4 sm:right-8 z-30 flex items-center gap-2 h-13 px-4 sm:px-5 rounded-2xl bg-google-blue hover:bg-google-blue-hover text-white shadow-lg shadow-google-blue/30 transition-all duration-200 cursor-pointer active:scale-95 select-none"
           title="Add Expense"
         >
           <Plus size={20} strokeWidth={2.2} />
-          <span className="text-sm font-semibold tracking-tight">Add Expense</span>
+          <span className="text-sm font-semibold tracking-tight">
+            Add Expense
+          </span>
         </button>
       )}
 
       {/* Bottom Navigation (Material 3 + Apple HIG) */}
       <footer className="bg-surface/85 backdrop-blur-md border-t border-border shrink-0 w-full z-20 pt-1.5 pb-[max(0.35rem,env(safe-area-inset-bottom,0px))]">
-        <div className="w-full max-w-3xl mx-auto flex justify-around items-center h-13 sm:h-14 px-4 min-[390px]:px-6 sm:px-8 md:px-10">
-          <NavItem 
-            icon={<BarChart2 size={19} />} 
-            label="Overview" 
-            active={activeTab === 'Overview'} 
-            onClick={() => setActiveTab('Overview')} 
-          />
-          <NavItem 
-            icon={<BookOpen size={19} />} 
-            label="Ledger" 
-            active={activeTab === 'Transactions'} 
-            onClick={() => setActiveTab('Transactions')} 
-          />
-          <NavItem 
-            icon={<ShoppingBag size={19} />} 
-            label="Shopping" 
-            active={activeTab === 'Lists'} 
-            onClick={() => setActiveTab('Lists')} 
-          />
-          <NavItem 
-            icon={<Repeat size={19} />} 
-            label="Fixed" 
-            active={activeTab === 'Fixed'} 
-            onClick={() => setActiveTab('Fixed')} 
-          />
-          <NavItem 
-            icon={<Settings size={19} />} 
-            label="Settings" 
-            active={activeTab === 'Settings'} 
-            onClick={() => setActiveTab('Settings')} 
-          />
+        <div className="w-full max-w-3xl mx-auto flex justify-around items-center h-13 sm:h-14 px-2 min-[360px]:px-4 min-[390px]:px-6 sm:px-8 md:px-10">
+          {isSplitLedger ? (
+            /* Split Ledger Tabs: Group View | Individual View | Settings (Gemini not required for Split) */
+            <>
+              <NavItem 
+                icon={<ReceiptText size={19} />} 
+                label="Expenses" 
+                active={activeTab === 'Group' || activeTab === 'Overview' || activeTab === 'Lists' || activeTab === 'Fixed'} 
+                onClick={() => setActiveTab('Group')} 
+              />
+
+              <NavItem 
+                icon={<UserCheck size={19} />} 
+                label="Balances" 
+                active={activeTab === 'Individual' || activeTab === 'Transactions'} 
+                onClick={() => setActiveTab('Individual')} 
+              />
+
+              <NavItem 
+                icon={<Settings size={19} />} 
+                label="Settings" 
+                active={activeTab === 'Settings'} 
+                onClick={() => setActiveTab('Settings')} 
+              />
+            </>
+          ) : (
+            /* Budget Ledger Tabs: Overview | Ledger | Shopping | (Gemini) | Fixed | Settings */
+            <>
+              <NavItem 
+                icon={<BarChart2 size={19} />} 
+                label="Overview" 
+                active={activeTab === 'Overview' || activeTab === 'Group'} 
+                onClick={() => setActiveTab('Overview')} 
+              />
+
+              {!effectiveGeminiEnabled && (
+                <NavItem 
+                  icon={<BookOpen size={19} />} 
+                  label="Ledger" 
+                  active={activeTab === 'Transactions' || activeTab === 'Individual'} 
+                  onClick={() => setActiveTab('Transactions')} 
+                />
+              )}
+
+              <NavItem 
+                icon={<ShoppingBag size={19} />} 
+                label="Shopping" 
+                active={activeTab === 'Lists'} 
+                onClick={() => setActiveTab('Lists')} 
+              />
+
+              {effectiveGeminiEnabled && (
+                /* Middle: 3rd from left & 3rd from right - Gemini AI Input */
+                <button 
+                  type="button"
+                  disabled={!isOnline}
+                  aria-label="Gemini AI"
+                  className={`flex flex-col items-center justify-center select-none min-w-[44px] min-[390px]:min-w-[54px] py-0.5 group transition-colors ${
+                    isOnline 
+                      ? 'cursor-pointer active:scale-95' 
+                      : 'cursor-not-allowed opacity-40'
+                  }`}
+                  onClick={() => {
+                    if (isOnline) {
+                      setShowVoiceModal(true);
+                    }
+                  }}
+                  title={isOnline ? 'Add expenses or shopping items with Gemini (voice or text)' : 'Gemini requires active internet connection'}
+                >
+                  <div 
+                    className={`w-11 sm:w-12 h-7 rounded-full flex items-center justify-center transition-all duration-200 ${
+                      showVoiceModal
+                        ? 'bg-google-blue/15 dark:bg-google-blue/20'
+                        : 'group-hover:bg-surface-hover/80'
+                    }`}
+                  >
+                    <GeminiIcon 
+                      size={22} 
+                      disabled={!isOnline} 
+                      className="transition-transform duration-200 group-hover:scale-110 drop-shadow-[0_1px_1px_rgba(0,0,0,0.06)]" 
+                    />
+                  </div>
+                  <span className={`text-[11px] sm:text-xs tracking-tight leading-tight mt-0.5 transition-colors whitespace-nowrap ${
+                    showVoiceModal 
+                      ? 'font-semibold text-google-blue' 
+                      : 'font-medium text-text-secondary group-hover:text-text-primary'
+                  }`}>
+                    Gemini
+                  </span>
+                </button>
+              )}
+
+              <NavItem 
+                icon={<Repeat size={19} />} 
+                label="Fixed" 
+                active={activeTab === 'Fixed'} 
+                onClick={() => setActiveTab('Fixed')} 
+              />
+              <NavItem 
+                icon={<Settings size={19} />} 
+                label="Settings" 
+                active={activeTab === 'Settings'} 
+                onClick={() => setActiveTab('Settings')} 
+              />
+            </>
+          )}
         </div>
       </footer>
     </div>
@@ -3111,7 +4471,7 @@ function NavItem({
   return (
     <button 
       type="button"
-      className="flex flex-col items-center justify-center cursor-pointer transition-colors group select-none min-w-[50px] min-[390px]:min-w-[56px] py-0.5"
+      className="flex flex-col items-center justify-center cursor-pointer transition-colors group select-none min-w-[44px] min-[390px]:min-w-[54px] py-0.5"
       onClick={onClick}
     >
       <div 

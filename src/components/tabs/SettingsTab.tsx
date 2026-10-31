@@ -27,11 +27,25 @@ import {
   AlertTriangle,
   Loader2,
   X,
-  Video,
-  Briefcase
+  ReceiptText,
+  QrCode,
+  Copy,
+  CheckCheck,
+  Info
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import type { ExpenseGroup, CategoryData, UserRole, ThemeMode, Transaction, ShoppingItem, RecurringExpense } from '../../types';
+import { GeminiIcon } from '../icons/GeminiIcon';
+import { 
+  getSavedPersonalUpi, 
+  savePersonalUpi, 
+  removePersonalUpi,
+  formatUpiId, 
+  isValidUpiId, 
+  generateUpiQrDataUrl, 
+  buildUpiPaymentUri 
+} from '../../utils/upiUtils';
+import { updateGroupMemberUpi } from '../../services/expenseService';
 import { 
   DEFAULT_DIGEST_TIME, 
   DIGEST_TIME_PRESETS, 
@@ -39,6 +53,8 @@ import {
 } from '../../services/notificationService';
 
 interface SettingsTabProps {
+  geminiEnabled?: boolean;
+  onToggleGemini?: (enabled: boolean) => void;
   themeMode?: ThemeMode;
   onSelectThemeMode?: (mode: ThemeMode) => void;
   darkMode?: boolean;
@@ -71,12 +87,15 @@ interface SettingsTabProps {
   isStandalone?: boolean;
   onOpenInstallModal?: () => void;
   onOpenJoinModal?: () => void;
+  onOpenProfileSetup?: () => void;
   pendingSyncCount?: number;
-  onOpenVideoModal?: () => void;
-  onOpenPortfolioModal?: () => void;
+  onOpenInviteModal?: () => void;
+  onTriggerTestSplitNotification?: () => void;
 }
 
 export function SettingsTab({
+  geminiEnabled = false,
+  onToggleGemini,
   themeMode = 'system',
   onSelectThemeMode,
   darkMode,
@@ -109,9 +128,10 @@ export function SettingsTab({
   isStandalone = false,
   onOpenInstallModal,
   onOpenJoinModal,
+  onOpenProfileSetup,
   pendingSyncCount = 0,
-  onOpenVideoModal,
-  onOpenPortfolioModal
+  onOpenInviteModal,
+  onTriggerTestSplitNotification
 }: SettingsTabProps) {
   const { user, signInWithGoogle, logOut } = useAuth();
   const [isSyncing, setIsSyncing] = useState(false);
@@ -140,6 +160,83 @@ export function SettingsTab({
       await onTriggerTestDailyDigest();
     } finally {
       setTimeout(() => setIsTestingDaily(false), 600);
+    }
+  };
+
+  const isSplit = activeGroup?.type === 'split';
+  const [isTestingSplit, setIsTestingSplit] = useState(false);
+
+  // Personal UPI Settings State
+  const [personalUpi, setPersonalUpi] = useState(() => getSavedPersonalUpi());
+  const [savedUpi, setSavedUpi] = useState(() => getSavedPersonalUpi());
+  const [upiSaveNotice, setUpiSaveNotice] = useState<string | null>(null);
+  const [showPersonalQr, setShowPersonalQr] = useState(false);
+  const [personalQrUrl, setPersonalQrUrl] = useState('');
+  const [copiedPersonalUpi, setCopiedPersonalUpi] = useState(false);
+
+  const formattedPersonalUpi = formatUpiId(personalUpi);
+  const isPersonalUpiValid = isValidUpiId(personalUpi);
+
+  // Generate QR code for saved receiving UPI ID
+  React.useEffect(() => {
+    let active = true;
+    if (savedUpi && isValidUpiId(savedUpi) && showPersonalQr) {
+      // Intentionally omit payee name (pn) so the QR code never embeds the webapp login name.
+      // The payer's UPI app queries NPCI to display the real, bank-verified account holder name.
+      const personalUri = buildUpiPaymentUri({
+        pa: savedUpi
+      });
+      generateUpiQrDataUrl(personalUri)
+        .then(url => {
+          if (active) setPersonalQrUrl(url);
+        })
+        .catch(console.warn);
+    }
+    return () => { active = false; };
+  }, [savedUpi, showPersonalQr]);
+
+  const handleSavePersonalUpi = async () => {
+    const cleanUpi = formatUpiId(personalUpi);
+    if (!cleanUpi) {
+      removePersonalUpi();
+      setSavedUpi('');
+      if (activeGroup && user) {
+        updateGroupMemberUpi(activeGroup, user.uid, '').catch(console.warn);
+      }
+      setShowPersonalQr(false);
+      setUpiSaveNotice('UPI ID removed');
+      setTimeout(() => setUpiSaveNotice(null), 2000);
+      return;
+    }
+
+    savePersonalUpi(cleanUpi);
+    setSavedUpi(cleanUpi);
+    if (activeGroup && user) {
+      updateGroupMemberUpi(activeGroup, user.uid, cleanUpi).catch(console.warn);
+    }
+    setUpiSaveNotice('UPI ID saved');
+    setTimeout(() => setUpiSaveNotice(null), 2000);
+  };
+
+  const handleClearPersonalUpi = async () => {
+    setPersonalUpi('');
+    setSavedUpi('');
+    removePersonalUpi();
+    if (activeGroup && user) {
+      updateGroupMemberUpi(activeGroup, user.uid, '').catch(console.warn);
+    }
+    setShowPersonalQr(false);
+    setUpiSaveNotice('UPI ID removed');
+    setTimeout(() => setUpiSaveNotice(null), 2000);
+  };
+
+  const handleTestSplitAlert = async () => {
+    if (!onTriggerTestSplitNotification) return;
+    setIsTestingSplit(true);
+    try {
+      await onTriggerTestSplitNotification();
+    } finally {
+      setTimeout(() => setIsTestingSplit(false), 600);
     }
   };
 
@@ -183,9 +280,20 @@ export function SettingsTab({
                       {(user.displayName || user.email || 'U').charAt(0).toUpperCase()}
                     </div>
                   )}
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-text-primary truncate">
-                      {user.displayName || 'Account'}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-text-primary truncate">
+                        {user.displayName || 'Account'}
+                      </span>
+                      {onOpenProfileSetup && (
+                        <button
+                          type="button"
+                          onClick={onOpenProfileSetup}
+                          className="text-[11px] font-medium text-google-blue hover:underline cursor-pointer"
+                        >
+                          Edit
+                        </button>
+                      )}
                     </div>
                     <div className="text-xs text-text-secondary truncate">
                       {user.email}
@@ -321,11 +429,137 @@ export function SettingsTab({
         </div>
       </div>
 
+      {/* UPI Settlements Card */}
+      <div className="space-y-1.5">
+        <div className="px-1 text-xs font-semibold uppercase tracking-tight text-text-secondary">
+          UPI Settlements
+        </div>
+
+        <div className="bg-surface rounded-3xl border border-border p-4 sm:p-5 space-y-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0">
+              <Smartphone size={17} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold text-text-primary leading-tight">
+                Your UPI ID
+              </div>
+              <p className="text-xs text-text-secondary leading-snug mt-0.5">
+                Receive settlements directly via QR &amp; UPI apps
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2.5 pt-0.5">
+            <div>
+              <input
+                type="text"
+                value={personalUpi}
+                onChange={(e) => setPersonalUpi(e.target.value)}
+                placeholder="e.g. yourname@oksbi"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-surface-hover border border-border text-xs sm:text-sm text-text-primary font-mono outline-none focus:border-google-blue placeholder:text-text-secondary/50 placeholder:font-sans"
+              />
+            </div>
+
+            {/* Action Buttons Row (One single line, space-conscious) */}
+            <div className="flex items-center gap-2 flex-nowrap overflow-x-auto no-scrollbar pt-0.5">
+              <button
+                type="button"
+                onClick={handleSavePersonalUpi}
+                disabled={!isPersonalUpiValid && personalUpi.trim().length > 0}
+                className="h-9 px-3.5 rounded-xl bg-google-blue hover:bg-blue-700 disabled:opacity-40 text-white font-medium text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-xs shrink-0 whitespace-nowrap"
+              >
+                {upiSaveNotice === 'UPI ID saved' ? (
+                  <>
+                    <Check size={14} className="text-white" />
+                    <span>Saved!</span>
+                  </>
+                ) : (
+                  <span>Save UPI ID</span>
+                )}
+              </button>
+
+              {/* View My QR: Only visible once UPI ID is saved */}
+              {savedUpi && isValidUpiId(savedUpi) && (
+                <button
+                  type="button"
+                  onClick={() => setShowPersonalQr(!showPersonalQr)}
+                  className="h-9 px-3 rounded-xl bg-surface hover:bg-surface-hover border border-border text-text-primary font-medium text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors shrink-0 whitespace-nowrap"
+                >
+                  <QrCode size={14} className="text-text-primary" />
+                  <span>{showPersonalQr ? 'Hide QR' : 'View QR'}</span>
+                </button>
+              )}
+
+              {/* Remove: Only visible once a UPI ID is saved */}
+              {savedUpi && (
+                <button
+                  type="button"
+                  onClick={handleClearPersonalUpi}
+                  className="h-9 px-2.5 rounded-xl bg-surface hover:bg-red-500/10 border border-border text-text-secondary hover:text-google-red text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors shrink-0 whitespace-nowrap"
+                >
+                  <Trash2 size={13} />
+                  <span>Remove</span>
+                </button>
+              )}
+            </div>
+
+            {/* Incomplete / invalid format helper */}
+            {personalUpi.trim() && !isPersonalUpiValid && (
+              <div className="text-[11px] text-text-secondary pt-0.5">
+                Format: <span className="font-mono text-text-primary">username@bank</span>
+              </div>
+            )}
+
+            {/* Live Personal QR Code Preview */}
+            {showPersonalQr && personalQrUrl && savedUpi && (
+              <div className="p-4 sm:p-5 rounded-2xl bg-surface-hover/50 border border-border text-center space-y-2.5 animate-in fade-in duration-150">
+                <div className="inline-block p-3.5 bg-white rounded-2xl shadow-xs border border-neutral-200">
+                  <img 
+                    src={personalQrUrl} 
+                    alt="Personal UPI QR" 
+                    className="w-48 h-48 sm:w-52 sm:h-52 object-contain mx-auto rounded"
+                  />
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(savedUpi);
+                        setCopiedPersonalUpi(true);
+                        setTimeout(() => setCopiedPersonalUpi(false), 2000);
+                      } catch {}
+                    }}
+                    title="Click to copy UPI ID"
+                    aria-label={`Copy UPI ID ${savedUpi}`}
+                    className="group/upi inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface hover:bg-surface-active border border-border hover:border-google-blue/40 text-xs font-mono font-bold text-text-primary transition-all cursor-pointer select-none active:scale-95"
+                  >
+                    <span>{savedUpi}</span>
+                    {copiedPersonalUpi ? (
+                      <span className="inline-flex items-center gap-0.5 text-[10px] font-sans font-semibold text-emerald-600 dark:text-emerald-400">
+                        <Check size={11} strokeWidth={2.5} />
+                        Copied
+                      </span>
+                    ) : (
+                      <Copy size={11} className="text-text-secondary group-hover/upi:text-google-blue transition-colors shrink-0" />
+                    )}
+                  </button>
+                  <p className="text-[11px] text-text-secondary mt-1">
+                    Scan with any UPI app to settle directly
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Group Sharing Settings */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between px-1">
           <span className="text-xs font-semibold uppercase tracking-tight text-text-secondary">
-            Groups & Sharing
+            Groups &amp; Sharing
           </span>
           <div className="flex items-center gap-3">
             {onOpenJoinModal && (
@@ -350,20 +584,26 @@ export function SettingsTab({
         </div>
 
         <div className="bg-surface rounded-3xl border border-border divide-y divide-border overflow-hidden shadow-xs">
+          {/* Active Ledger Info */}
           <button
             type="button"
             onClick={() => onOpenGroupModal('members')}
             className="w-full p-4 flex items-center justify-between gap-3 hover:bg-surface-hover/50 transition-colors cursor-pointer text-left"
           >
             <div>
-              <div className="text-sm font-medium text-text-primary">
-                {activeGroup ? activeGroup.name : 'Personal'}
+              <div className="text-sm font-semibold text-text-primary flex items-center gap-2">
+                <span>{activeGroup ? activeGroup.name : 'Personal'}</span>
+                {isSplit && (
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-google-blue/10 text-google-blue border border-google-blue/20">
+                    Split
+                  </span>
+                )}
               </div>
               <div className="text-xs text-text-secondary mt-0.5">
                 Invite code: <span className="font-mono font-medium">{activeGroup?.inviteCode || 'N/A'}</span> · Role: <span className="font-medium text-text-primary">{userRole === 'owner' ? 'Admin' : userRole === 'viewer' ? 'View Only' : 'Can Edit'}</span>
               </div>
             </div>
-            <div className="flex items-center gap-1 text-xs text-google-blue font-medium">
+            <div className="flex items-center gap-1 text-xs text-google-blue font-medium shrink-0">
               <span>Manage</span>
               <ChevronRight size={15} />
             </div>
@@ -394,222 +634,319 @@ export function SettingsTab({
         </div>
       </div>
 
-      {/* Categories */}
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between px-1">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-xs font-semibold uppercase tracking-tight text-text-secondary">
-              Categories
-            </span>
-            {activeGroup && (
-              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-google-blue/10 text-google-blue truncate max-w-[150px]">
-                {activeGroup.name}
+      {/* Categories: ONLY for Budget Ledgers (Hidden for Split Ledgers) */}
+      {!isSplit && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between px-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs font-semibold uppercase tracking-tight text-text-secondary">
+                Categories
               </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={() => onOpenCategoryModal?.('manage')}
-              className="text-xs text-text-secondary hover:text-text-primary hover:underline font-medium cursor-pointer"
-            >
-              Manage
-            </button>
-            {userRole !== 'viewer' && (
+              {activeGroup && (
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-google-blue/10 text-google-blue truncate max-w-[150px]">
+                  {activeGroup.name}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
               <button
                 type="button"
-                onClick={() => onOpenCategoryModal?.('add')}
-                className="text-xs text-google-blue hover:underline font-semibold cursor-pointer"
+                onClick={() => onOpenCategoryModal?.('manage')}
+                className="text-xs text-text-secondary hover:text-text-primary hover:underline font-medium cursor-pointer"
               >
-                + Add
+                Manage
               </button>
-            )}
-          </div>
-        </div>
-
-        <div className="bg-surface rounded-3xl border border-border p-4 shadow-xs">
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(categories).map(([k, cat]) => {
-              const isOther = k === 'other';
-
-              return (
-                <div
-                  key={k}
-                  className="inline-flex items-center gap-2 pl-3 pr-2.5 py-1.5 rounded-full bg-surface-hover border border-border text-xs transition-colors group"
+              {userRole !== 'viewer' && (
+                <button
+                  type="button"
+                  onClick={() => onOpenCategoryModal?.('add')}
+                  className="text-xs text-google-blue hover:underline font-semibold cursor-pointer"
                 >
-                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: cat.hex }} />
-                  <span className="text-text-primary font-medium">{cat.name}</span>
-                  {!isOther && onDeleteCategory && userRole !== 'viewer' && (
-                    <button
-                      type="button"
-                      onClick={() => setDeleteCategoryKey(k)}
-                      className="ml-0.5 w-4 h-4 rounded-full flex items-center justify-center text-text-secondary/70 hover:text-red-500 hover:bg-red-500/15 cursor-pointer transition-colors"
-                      title={`Delete ${cat.name} category`}
-                    >
-                      <X size={11} strokeWidth={2.5} />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+                  + Add
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-surface rounded-3xl border border-border p-4 shadow-xs">
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(categories).map(([k, cat]) => {
+                const isOther = k === 'other';
+
+                return (
+                  <div
+                    key={k}
+                    className="inline-flex items-center gap-2 pl-3 pr-2.5 py-1.5 rounded-full bg-surface-hover border border-border text-xs transition-colors group"
+                  >
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: cat.hex }} />
+                    <span className="text-text-primary font-medium">{cat.name}</span>
+                    {!isOther && onDeleteCategory && userRole !== 'viewer' && (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteCategoryKey(k)}
+                        className="ml-0.5 w-4 h-4 rounded-full flex items-center justify-center text-text-secondary/70 hover:text-red-500 hover:bg-red-500/15 cursor-pointer transition-colors"
+                        title={`Delete ${cat.name} category`}
+                      >
+                        <X size={11} strokeWidth={2.5} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Notifications & Device Alerts */}
       <div className="space-y-1.5">
         <div className="px-1 text-xs font-semibold uppercase tracking-tight text-text-secondary">
-          Notifications & Alerts
+          Notifications &amp; Alerts
         </div>
 
         <div className="bg-surface rounded-3xl border border-border divide-y divide-border overflow-hidden shadow-xs">
-          {/* Daily Expense Digest with Customizable Delivery Time */}
-          <div className="p-4 space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0 mt-0.5">
-                  <Clock size={16} />
-                </div>
-                <div>
-                  <div className="text-sm sm:text-base font-medium text-text-primary flex items-center gap-2 flex-wrap">
-                    <span>Daily Expense Digest</span>
-                    <span className="px-2 py-0.5 text-xs font-semibold rounded-md bg-google-blue/10 text-google-blue dark:text-blue-400">
-                      {formattedDigestTime}
-                    </span>
-                    {isDefaultTime ? (
-                      <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-surface-hover text-text-secondary border border-border/60">
-                        Default
+          {isSplit ? (
+            /* Split Ledger Custom Notifications */
+            <>
+              {/* Split Expense Alerts */}
+              <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0 mt-0.5">
+                    <ReceiptText size={16} />
+                  </div>
+                  <div>
+                    <div className="text-sm sm:text-base font-medium text-text-primary flex items-center gap-2">
+                      <span>Group Bill &amp; Expense Alerts</span>
+                      <span className="px-2 py-0.5 text-xs font-semibold rounded-md bg-google-blue/10 text-google-blue dark:text-blue-400">
+                        Real-time
                       </span>
-                    ) : (
-                      <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-google-blue/10 text-google-blue border border-google-blue/20">
-                        Custom
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs sm:text-sm text-text-secondary mt-0.5 leading-relaxed">
-                    Sends a {formattedDigestTime} summary to all members with ledger access on days there was expense activity.
+                    </div>
+                    <div className="text-xs sm:text-sm text-text-secondary mt-0.5 leading-relaxed">
+                      Instant alerts to all members when a shared bill or expense cut is recorded or updated in {activeGroup?.name || 'this ledger'}.
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
-                <button
-                  type="button"
-                  onClick={handleTestDaily}
-                  disabled={isTestingDaily}
-                  className="px-3 py-1.5 rounded-xl border border-border bg-surface-hover hover:border-google-blue/40 text-xs font-medium text-text-primary flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-                  title={`Trigger a preview notification of today's ${formattedDigestTime} expense summary`}
-                >
-                  <Play size={11} className={isTestingDaily ? 'animate-spin' : ''} />
-                  <span>{isTestingDaily ? 'Sending…' : `Test ${formattedDigestTime} Alert`}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Time Customization Tray */}
-            <div className="bg-surface-hover/40 rounded-2xl p-3 sm:p-3.5 border border-border/60 space-y-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-text-primary">
-                  <Clock size={13} className="text-google-blue" />
-                  <span>Digest Scheduled Time</span>
-                </div>
-                
-                <div className="flex items-center gap-2">
-                  {savedTimeNotice && (
-                    <span className="text-xs font-semibold text-google-blue dark:text-blue-400 flex items-center gap-1 animate-in fade-in duration-200">
-                      <Check size={12} strokeWidth={2.5} />
-                      Saved
-                    </span>
-                  )}
-                  {!isDefaultTime && (
-                    <button
-                      type="button"
-                      onClick={() => handleSelectDigestTime(DEFAULT_DIGEST_TIME)}
-                      className="text-xs font-medium text-google-blue hover:underline flex items-center gap-1 cursor-pointer"
-                      title="Reset to 9:00 PM default"
-                    >
-                      <RotateCcw size={11} />
-                      <span>Reset to 9:00 PM</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Preset Chips */}
-              <div className="flex flex-wrap items-center gap-1.5">
-                {DIGEST_TIME_PRESETS.map((preset) => {
-                  const isSelected = digestTime === preset.value;
-                  return (
-                    <button
-                      key={preset.value}
-                      type="button"
-                      onClick={() => handleSelectDigestTime(preset.value)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
-                        isSelected
-                          ? 'bg-google-blue text-white shadow-2xs font-semibold ring-2 ring-google-blue/20'
-                          : 'bg-surface border border-border text-text-primary hover:bg-surface-hover hover:border-google-blue/30'
-                      }`}
-                    >
-                      {isSelected && <Check size={12} strokeWidth={2.5} />}
-                      <span>{preset.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Custom Time Input */}
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1 border-t border-border/40 text-xs">
-                <span className="text-text-secondary shrink-0">
-                  Or set any custom time:
-                </span>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <input
-                      type="time"
-                      value={digestTime}
-                      onChange={(e) => {
-                        if (e.target.value) {
-                          handleSelectDigestTime(e.target.value);
-                        }
-                      }}
-                      className="h-8 px-3 rounded-xl bg-surface border border-border text-xs font-semibold text-text-primary outline-none focus:border-google-blue focus:ring-2 focus:ring-google-blue/20 transition-all cursor-pointer"
-                      aria-label="Select custom digest time"
-                    />
-                  </div>
-                  <span className="text-xs text-text-secondary">
-                    Device local time
+                <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                  <span className="text-xs sm:text-sm font-semibold text-google-blue dark:text-blue-400 flex items-center gap-1">
+                    <Check size={13} strokeWidth={2.5} />
+                    <span>Active</span>
                   </span>
                 </div>
               </div>
-            </div>
-          </div>
 
-          {/* Immediate Buying List Alert */}
-          <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0 mt-0.5">
-                <ShoppingBag size={16} />
-              </div>
-              <div>
-                <div className="text-sm sm:text-base font-medium text-text-primary flex items-center gap-2">
-                  <span>Immediate Buying List Alerts</span>
-                  <span className="px-2 py-0.5 text-xs font-semibold rounded-md bg-google-blue/10 text-google-blue dark:text-blue-400">
-                    Real-time
+              {/* Settlement Confirmations */}
+              <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <Check size={16} strokeWidth={2.5} />
+                  </div>
+                  <div>
+                    <div className="text-sm sm:text-base font-medium text-text-primary flex items-center gap-2">
+                      <span>Settlement &amp; Payment Confirmations</span>
+                      <span className="px-2 py-0.5 text-xs font-semibold rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                        Real-time
+                      </span>
+                    </div>
+                    <div className="text-xs sm:text-sm text-text-secondary mt-0.5 leading-relaxed">
+                      Notifies immediately when a friend marks an amount as settled or paid to keep group balances accurate.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                  <span className="text-xs sm:text-sm font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <Check size={13} strokeWidth={2.5} />
+                    <span>Active</span>
                   </span>
                 </div>
-                <div className="text-xs sm:text-sm text-text-secondary mt-0.5 leading-relaxed">
-                  Notifies all devices instantly (or when reconnected) when items are added with category &amp; due date.
+              </div>
+
+              {/* Outstanding Balance Reminders */}
+              <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <Clock size={16} />
+                  </div>
+                  <div>
+                    <div className="text-sm sm:text-base font-medium text-text-primary flex items-center gap-2">
+                      <span>Outstanding Balance Reminders</span>
+                      <span className="px-2 py-0.5 text-xs font-semibold rounded-md bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                        Smart Alert
+                      </span>
+                    </div>
+                    <div className="text-xs sm:text-sm text-text-secondary mt-0.5 leading-relaxed">
+                      Periodic gentle balance notifications so no one forgets who owes whom before trips end or months close.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleTestSplitAlert}
+                    disabled={isTestingSplit}
+                    className="px-3 py-1.5 rounded-xl border border-border bg-surface-hover hover:border-google-blue/40 text-xs font-medium text-text-primary flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                    title="Send a sample settlement reminder notification"
+                  >
+                    <Play size={11} className={isTestingSplit ? 'animate-spin' : ''} />
+                    <span>{isTestingSplit ? 'Sending…' : 'Test Reminder Alert'}</span>
+                  </button>
                 </div>
               </div>
-            </div>
+            </>
+          ) : (
+            /* Budget Ledger Custom Notifications */
+            <>
+              {/* Daily Expense Digest with Customizable Delivery Time */}
+              <div className="p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0 mt-0.5">
+                      <Clock size={16} />
+                    </div>
+                    <div>
+                      <div className="text-sm sm:text-base font-medium text-text-primary flex items-center gap-2 flex-wrap">
+                        <span>Daily Expense Digest</span>
+                        <span className="px-2 py-0.5 text-xs font-semibold rounded-md bg-google-blue/10 text-google-blue dark:text-blue-400">
+                          {formattedDigestTime}
+                        </span>
+                        {isDefaultTime ? (
+                          <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-surface-hover text-text-secondary border border-border/60">
+                            Default
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 text-xs font-medium rounded-md bg-google-blue/10 text-google-blue border border-google-blue/20">
+                            Custom
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs sm:text-sm text-text-secondary mt-0.5 leading-relaxed">
+                        Sends a {formattedDigestTime} summary to all members with ledger access on days there was expense activity.
+                      </div>
+                    </div>
+                  </div>
 
-            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
-              <span className="text-xs sm:text-sm font-semibold text-google-blue dark:text-blue-400 flex items-center gap-1">
-                <Check size={13} strokeWidth={2.5} />
-                <span>Active</span>
-              </span>
-            </div>
-          </div>
+                  <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleTestDaily}
+                      disabled={isTestingDaily}
+                      className="px-3 py-1.5 rounded-xl border border-border bg-surface-hover hover:border-google-blue/40 text-xs font-medium text-text-primary flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                      title={`Trigger a preview notification of today's ${formattedDigestTime} expense summary`}
+                    >
+                      <Play size={11} className={isTestingDaily ? 'animate-spin' : ''} />
+                      <span>{isTestingDaily ? 'Sending…' : `Test ${formattedDigestTime} Alert`}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Time Customization Tray */}
+                <div className="bg-surface-hover/40 rounded-2xl p-3 sm:p-3.5 border border-border/60 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-text-primary">
+                      <Clock size={13} className="text-google-blue" />
+                      <span>Digest Scheduled Time</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      {savedTimeNotice && (
+                        <span className="text-xs font-semibold text-google-blue dark:text-blue-400 flex items-center gap-1 animate-in fade-in duration-200">
+                          <Check size={12} strokeWidth={2.5} />
+                          Saved
+                        </span>
+                      )}
+                      {!isDefaultTime && (
+                        <button
+                          type="button"
+                          onClick={() => handleSelectDigestTime(DEFAULT_DIGEST_TIME)}
+                          className="text-xs font-medium text-google-blue hover:underline flex items-center gap-1 cursor-pointer"
+                          title="Reset to 9:00 PM default"
+                        >
+                          <RotateCcw size={11} />
+                          <span>Reset to 9:00 PM</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Preset Chips */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {DIGEST_TIME_PRESETS.map((preset) => {
+                      const isSelected = digestTime === preset.value;
+                      return (
+                        <button
+                          key={preset.value}
+                          type="button"
+                          onClick={() => handleSelectDigestTime(preset.value)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                            isSelected
+                              ? 'bg-google-blue text-white shadow-2xs font-semibold ring-2 ring-google-blue/20'
+                              : 'bg-surface border border-border text-text-primary hover:bg-surface-hover hover:border-google-blue/30'
+                          }`}
+                        >
+                          {isSelected && <Check size={12} strokeWidth={2.5} />}
+                          <span>{preset.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Custom Time Input */}
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1 border-t border-border/40 text-xs">
+                    <span className="text-text-secondary shrink-0">
+                      Or set any custom time:
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <div className="relative">
+                        <input
+                          type="time"
+                          value={digestTime}
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              handleSelectDigestTime(e.target.value);
+                            }
+                          }}
+                          className="h-8 px-3 rounded-xl bg-surface border border-border text-xs font-semibold text-text-primary outline-none focus:border-google-blue focus:ring-2 focus:ring-google-blue/20 transition-all cursor-pointer"
+                          aria-label="Select custom digest time"
+                        />
+                      </div>
+                      <span className="text-xs text-text-secondary">
+                        Device local time
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Immediate Buying List Alert */}
+              <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0 mt-0.5">
+                    <ShoppingBag size={16} />
+                  </div>
+                  <div>
+                    <div className="text-sm sm:text-base font-medium text-text-primary flex items-center gap-2">
+                      <span>Immediate Buying List Alerts</span>
+                      <span className="px-2 py-0.5 text-xs font-semibold rounded-md bg-google-blue/10 text-google-blue dark:text-blue-400">
+                        Real-time
+                      </span>
+                    </div>
+                    <div className="text-xs sm:text-sm text-text-secondary mt-0.5 leading-relaxed">
+                      Notifies all devices instantly (or when reconnected) when items are added with category &amp; due date.
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                  <span className="text-xs sm:text-sm font-semibold text-google-blue dark:text-blue-400 flex items-center gap-1">
+                    <Check size={13} strokeWidth={2.5} />
+                    <span>Active</span>
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Device Push Notifications Status */}
           <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -697,6 +1034,68 @@ export function SettingsTab({
         </div>
       </div>
 
+      {/* Gemini AI Features Toggle: ONLY for Budget Ledgers (Hidden for Split Ledgers) */}
+      {!isSplit && (
+        <div className="space-y-1.5">
+          <div className="px-1 text-xs font-semibold uppercase tracking-tight text-text-secondary">
+            AI Features
+          </div>
+
+          <div className="bg-surface rounded-3xl border border-border p-4 shadow-xs">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-full bg-google-blue/10 flex items-center justify-center shrink-0">
+                  <GeminiIcon size={20} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-text-primary">
+                    Enable Gemini
+                  </div>
+                  <div className="text-xs text-text-secondary truncate">
+                    {userRole === 'viewer'
+                      ? 'Disabled in View Only mode'
+                      : `Voice & text input for ${activeGroup?.name || 'this ledger'}`}
+                  </div>
+                </div>
+              </div>
+
+              {/* Apple HIG / Material 3 Switch */}
+              <button
+                type="button"
+                role="switch"
+                disabled={userRole === 'viewer'}
+                aria-checked={userRole !== 'viewer' && geminiEnabled}
+                onClick={() => {
+                  if (userRole !== 'viewer') {
+                    onToggleGemini?.(!geminiEnabled);
+                  }
+                }}
+                className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  userRole === 'viewer'
+                    ? 'opacity-40 cursor-not-allowed bg-surface-hover border-border'
+                    : geminiEnabled
+                    ? 'bg-google-blue cursor-pointer'
+                    : 'bg-surface-hover border-border cursor-pointer'
+                }`}
+                title={
+                  userRole === 'viewer'
+                    ? 'Gemini is disabled and uneditable for View Only ledgers'
+                    : geminiEnabled
+                    ? 'Disable Gemini for this ledger'
+                    : 'Enable Gemini for this ledger'
+                }
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                    geminiEnabled && userRole !== 'viewer' ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Appearance */}
       <div className="space-y-1.5">
         <div className="px-1 text-xs font-semibold uppercase tracking-tight text-text-secondary">
@@ -766,71 +1165,7 @@ export function SettingsTab({
         </div>
       </div>
 
-      {/* Product Video & HR Portfolio Showcase */}
-      {(onOpenVideoModal || onOpenPortfolioModal) && (
-        <div className="space-y-1.5">
-          <div className="px-1 text-xs font-semibold uppercase tracking-tight text-text-secondary flex items-center justify-between">
-            <span>Product Showcase & HR Portfolio</span>
-            <span className="text-[10px] font-mono text-emerald-500 font-semibold bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">Recruiter Hub</span>
-          </div>
 
-          <div className="bg-surface rounded-3xl border border-border divide-y divide-border overflow-hidden shadow-xs">
-            {onOpenVideoModal && (
-              <button
-                type="button"
-                onClick={onOpenVideoModal}
-                className="w-full p-4 flex items-center justify-between gap-3 hover:bg-surface-hover/60 transition-colors cursor-pointer text-left group"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                    <Video size={17} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-text-primary flex items-center gap-2">
-                      <span>Interactive Video Guide & Demo Recorder</span>
-                      <span className="px-1.5 py-0.5 rounded-md bg-google-blue/10 text-google-blue text-[10px] font-semibold">Studio</span>
-                    </div>
-                    <div className="text-xs text-text-secondary truncate">
-                      Watch narrated interactive tour, record screen demo & auto-scroll teleprompter
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 text-xs text-google-blue font-medium shrink-0">
-                  <span>Open Studio</span>
-                  <ChevronRight size={15} />
-                </div>
-              </button>
-            )}
-
-            {onOpenPortfolioModal && (
-              <button
-                type="button"
-                onClick={onOpenPortfolioModal}
-                className="w-full p-4 flex items-center justify-between gap-3 hover:bg-surface-hover/60 transition-colors cursor-pointer text-left group"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                    <Briefcase size={17} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium text-text-primary flex items-center gap-2">
-                      <span>HR Recruiter Portfolio & Technical Case Study</span>
-                      <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold">Ready to Paste</span>
-                    </div>
-                    <div className="text-xs text-text-secondary truncate">
-                      Architecture deep-dive, ATS resume bullets, interview cheatsheet & PDF export
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400 font-medium shrink-0">
-                  <span>View Case Study</span>
-                  <ChevronRight size={15} />
-                </div>
-              </button>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Guide & About */}
       {onOpenOnboarding && (
@@ -866,6 +1201,7 @@ export function SettingsTab({
           </div>
         </div>
       )}
+
       {/* Confirmation Modal when Signing Out with Pending Offline Changes */}
       {showPendingSignOutConfirm && (
         <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">

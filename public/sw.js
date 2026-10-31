@@ -39,6 +39,17 @@ self.addEventListener('fetch', (event) => {
   // Skip Firestore, Google APIs, and external endpoints
   if (url.origin !== self.location.origin) return;
 
+  // Skip Vite dev internals, APIs, HMR, and source modules
+  if (
+    url.pathname.startsWith('/@') || 
+    url.pathname.startsWith('/api') || 
+    url.pathname.startsWith('/src') ||
+    url.pathname.startsWith('/node_modules') || 
+    url.pathname.includes('vite')
+  ) {
+    return;
+  }
+
   // 1. Navigation (HTML documents): Network-first with cache fallback
   if (event.request.mode === 'navigate') {
     event.respondWith(

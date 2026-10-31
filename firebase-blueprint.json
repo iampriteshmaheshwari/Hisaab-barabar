@@ -27,6 +27,7 @@
         "members": { "type": "object" },
         "customCategories": { "type": "object" },
         "inviteCode": { "type": "string", "maxLength": 32 },
+        "type": { "type": "string", "enum": ["budget", "split"] },
         "createdAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
@@ -47,7 +48,15 @@
         "groupId": { "type": "string", "maxLength": 128 },
         "createdBy": { "type": "string", "maxLength": 128 },
         "createdByName": { "type": "string", "maxLength": 128 },
-        "createdAt": { "type": "string", "maxLength": 64 }
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "paidBy": { "type": "string", "maxLength": 128 },
+        "paidByName": { "type": "string", "maxLength": 128 },
+        "splitMode": { "type": "string", "enum": ["equal", "exact"] },
+        "splitMembers": { "type": "array", "items": { "type": "string" } },
+        "splits": { "type": "object" },
+        "isSettlement": { "type": "boolean" },
+        "settledTo": { "type": "string", "maxLength": 128 },
+        "settledToName": { "type": "string", "maxLength": 128 }
       },
       "required": ["name", "amount", "category", "date", "settled", "groupId"]
     },

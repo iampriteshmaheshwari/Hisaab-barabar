@@ -449,3 +449,152 @@ export async function dispatchInviteCodeRotatedNotification(
     id: `local_notif_${Date.now()}`
   };
 }
+
+// Dispatch Notification when a split expense is added or updated
+export async function dispatchSplitExpenseNotification(
+  group: ExpenseGroup,
+  expense: Transaction,
+  addedByUser?: User | null
+): Promise<AppNotification> {
+  const userName = addedByUser?.displayName || addedByUser?.email?.split('@')[0] || expense.paidByName || 'A member';
+  const memberCount = expense.splitMembers ? expense.splitMembers.length : (group.memberUids?.length || 2);
+  const title = `New Split Bill • ${group.name}`;
+  const message = `${userName} added "${expense.name}" (₹${expense.amount.toLocaleString('en-IN')}) split among ${memberCount} members.`;
+
+  const notifData: Omit<AppNotification, 'id'> = {
+    groupId: group.id,
+    groupName: group.name,
+    type: 'SPLIT_EXPENSE_ADDED',
+    title,
+    message,
+    itemName: expense.name,
+    totalAmount: expense.amount,
+    paidByName: expense.paidByName || userName,
+    splitMembersCount: memberCount,
+    createdBy: addedByUser?.uid || 'system',
+    createdByName: userName,
+    createdAt: new Date().toISOString(),
+    readBy: addedByUser ? [addedByUser.uid] : []
+  };
+
+  // Push immediate system notification
+  await showDeviceNotification(title, {
+    body: message,
+    tag: `split-expense-${expense.id}`
+  });
+
+  // Save to Firestore if cloud group
+  if (!group.id.startsWith('local_') && group.id !== 'local_group') {
+    try {
+      return await addGroupNotification(group.id, notifData);
+    } catch (err) {
+      console.warn('Could not save split notification to Firestore:', err);
+    }
+  }
+
+  return {
+    ...notifData,
+    id: `local_notif_${Date.now()}`
+  };
+}
+
+// Dispatch Notification when a debt settlement payment is recorded
+export async function dispatchSettlementNotification(
+  group: ExpenseGroup,
+  settlement: {
+    amount: number;
+    paidByName: string;
+    settledToName: string;
+    note?: string;
+  },
+  user?: User | null
+): Promise<AppNotification> {
+  const payerClean = settlement.paidByName?.trim().toLowerCase() === 'you'
+    ? (user?.displayName || user?.email?.split('@')[0] || 'A member')
+    : (settlement.paidByName || 'A member');
+  const receiverClean = settlement.settledToName?.trim().toLowerCase() === 'you'
+    ? 'group member'
+    : (settlement.settledToName || 'group member');
+
+  const title = `Settlement Recorded • ${group.name}`;
+  const message = `${payerClean} paid ₹${settlement.amount.toLocaleString('en-IN')} to ${receiverClean} to settle up.`;
+
+  const notifData: Omit<AppNotification, 'id'> = {
+    groupId: group.id,
+    groupName: group.name,
+    type: 'SETTLEMENT_RECORDED',
+    title,
+    message,
+    totalAmount: settlement.amount,
+    paidByName: payerClean,
+    settledToName: receiverClean,
+    createdBy: user?.uid || 'system',
+    createdByName: user?.displayName || payerClean,
+    createdAt: new Date().toISOString(),
+    readBy: user ? [user.uid] : []
+  };
+
+  // Push immediate system notification
+  await showDeviceNotification(title, {
+    body: message,
+    tag: `settlement-${Date.now()}`
+  });
+
+  // Save to Firestore if cloud group
+  if (!group.id.startsWith('local_') && group.id !== 'local_group') {
+    try {
+      return await addGroupNotification(group.id, notifData);
+    } catch (err) {
+      console.warn('Could not save settlement notification to Firestore:', err);
+    }
+  }
+
+  return {
+    ...notifData,
+    id: `local_notif_${Date.now()}`
+  };
+}
+
+// Dispatch Friendly Settlement Reminder Notification
+export async function dispatchSettlementReminderNotification(
+  group: ExpenseGroup,
+  debtorName: string,
+  amount: number,
+  senderUser?: User | null
+): Promise<AppNotification> {
+  const senderName = senderUser?.displayName || senderUser?.email?.split('@')[0] || 'A group member';
+  const title = `Settlement Reminder • ${group.name}`;
+  const message = `Reminder: ₹${amount.toLocaleString('en-IN')} pending balance in ${group.name} with ${debtorName}.`;
+
+  const notifData: Omit<AppNotification, 'id'> = {
+    groupId: group.id,
+    groupName: group.name,
+    type: 'SETTLEMENT_REMINDER',
+    title,
+    message,
+    totalAmount: amount,
+    createdBy: senderUser?.uid || 'system',
+    createdByName: senderName,
+    createdAt: new Date().toISOString(),
+    readBy: senderUser ? [senderUser.uid] : []
+  };
+
+  await showDeviceNotification(title, {
+    body: message,
+    tag: `reminder-${Date.now()}`
+  });
+
+  if (!group.id.startsWith('local_') && group.id !== 'local_group') {
+    try {
+      return await addGroupNotification(group.id, notifData);
+    } catch (err) {
+      console.warn('Could not save reminder notification to Firestore:', err);
+    }
+  }
+
+  return {
+    ...notifData,
+    id: `local_notif_${Date.now()}`
+  };
+}
+

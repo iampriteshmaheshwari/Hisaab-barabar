@@ -14,11 +14,6 @@ export function InstallAppModal({
   deferredPrompt,
   onInstallNative
 }: InstallAppModalProps) {
-  if (!isOpen) return null;
-
-  const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent || '');
-  const isAndroid = typeof navigator !== 'undefined' && /Android/.test(navigator.userAgent || '');
-
   React.useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -29,6 +24,11 @@ export function InstallAppModal({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  if (!isOpen) return null;
+
+  const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent || '');
+  const isAndroid = typeof navigator !== 'undefined' && /Android/.test(navigator.userAgent || '');
 
   return (
     <div 
