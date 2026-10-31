@@ -23,12 +23,17 @@ import {
   matchMemberKeys, 
   getReconciledExpenseStatusMap, 
   getMemberDisplayName, 
-  reconcileOrphanedSettledExpenses,
   formatSettlementDisplayTitle,
   formatTimeAgo,
   getDaysRemainingInTrash,
   evaluateTransactionDeleteRule,
   validateSettlementRestore,
+  canEditExpense,
+  canDeleteExpense,
+  canUndoSettlement as canUndoSettlementCheck,
+  canRestoreExpense,
+  canRestoreSettlement,
+  getExpenseLockInfo,
   type SettlementRestoreValidation
 } from '../../services/splitService';
 import { isWithinPast30Days } from '../../services/expenseService';
@@ -60,28 +65,14 @@ export function isExpenseCompleted(
   tx: Transaction,
   group?: ExpenseGroup,
   currentUid?: string,
-  currentEmail?: string
+  currentEmail?: string,
+  statusMap?: Record<string, { isFullySettled: boolean }>
 ): boolean {
-  if (tx.settled) return true;
   if (tx.isSettlement) return true;
-
-  const payerKey = tx.paidBy || tx.createdBy || '';
-  const participants = tx.splitMembers && tx.splitMembers.length > 0 
-    ? tx.splitMembers 
-    : [];
-
-  // If no explicit split members defined, rely strictly on tx.settled
-  if (participants.length === 0) return Boolean(tx.settled);
-
-  // The person who paid automatically has their own share satisfied
-  const nonPayerParticipants = participants.filter(p => !matchMemberKeys(p, payerKey, group, currentUid, currentEmail));
-  if (nonPayerParticipants.length === 0) return true;
-
-  const settledMembers = tx.settledMembers || [];
-  
-  return nonPayerParticipants.every(p => {
-    return settledMembers.some(sm => matchMemberKeys(sm, p, group, currentUid, currentEmail));
-  });
+  if (statusMap && statusMap[tx.id]) {
+    return Boolean(statusMap[tx.id].isFullySettled);
+  }
+  return false;
 }
 
 function formatDayHeading(dateStr?: string): { displayDate: string; monthKey: string; sortKey: string } {
@@ -280,43 +271,37 @@ export function SplitGroupView({
   const isViewer = userRole === 'viewer';
   const canManageExpenses = userRole === 'owner' || userRole === 'editor' || !user;
 
-  // Strict Permissions:
-  // 1. Edit: Group owner, expense payer/creator, or split participant
+  // Strict Central Permissions:
   const canEdit = (tx: Transaction) => {
-    if (isViewer) return false;
-    if (userRole === 'owner') return true;
-    if (isMe(tx.paidBy || tx.createdBy)) return true;
-    const participants = tx.splitMembers && tx.splitMembers.length > 0 ? tx.splitMembers : members.map(m => m.key);
-    return participants.some(p => isMe(p));
+    return canEditExpense(tx, user, userRole, group, transactions).allowed;
   };
 
-  // 2. Delete: Context-aware rules based on transaction status
   const canDelete = (tx: Transaction) => {
-    return evaluateTransactionDeleteRule(tx, user, userRole, group).canDelete;
+    return canDeleteExpense(tx, user, userRole, group, transactions).allowed;
   };
 
-  // 3. Undo settlement in settlement tab: Group owner, settlement payer, or settlement receiver
   const canUndoSettlement = (s: Transaction) => {
-    if (isViewer) return false;
-    if (userRole === 'owner') return true;
-    return isMe(s.paidBy || s.createdBy) || isMe(s.settledTo);
+    return canUndoSettlementCheck(s, user, userRole, group).allowed;
   };
 
-  // Self-healing: if any expenses were left as settled from an undone settlement, restore them to Open
-  useEffect(() => {
-    if (!group?.id || isViewer || !onUpdateExpense) return;
-    reconcileOrphanedSettledExpenses(
-      group.id,
-      transactions,
-      group,
-      user?.uid,
-      user?.email || undefined
-    ).then((repaired) => {
-      if (repaired.length > 0) {
-        repaired.forEach(tx => onUpdateExpense(tx));
-      }
-    }).catch(err => console.warn('Reconcile note:', err));
-  }, [group?.id, transactions.length]);
+  const handleEditExpenseClick = (tx: Transaction) => {
+    const check = canEditExpense(tx, user, userRole, group, transactions);
+    if (!check.allowed) {
+      if (onShowToast) onShowToast({ message: check.reason || 'Only the payer, the person who added it, or the group owner can edit this.', type: 'info' });
+      return;
+    }
+    setTxToEdit(tx);
+  };
+
+  const handleDeleteExpenseClick = (tx: Transaction) => {
+    const check = canDeleteExpense(tx, user, userRole, group, transactions);
+    if (!check.allowed) {
+      if (onShowToast) onShowToast({ message: check.reason || "Can't delete this expense.", type: 'info' });
+      return;
+    }
+    setTxToDelete(tx);
+  };
+
 
 
   const toggleExpand = (txId: string, e?: React.MouseEvent) => {
@@ -548,17 +533,26 @@ export function SplitGroupView({
                   </div>
                 </div>
 
-                {canUndoSettlement(s) && (
-                  <button
-                    type="button"
-                    onClick={() => setSettlementToUndo(s)}
-                    className="py-1.5 px-3 rounded-xl bg-surface-hover hover:bg-red-500/10 border border-border hover:border-red-500/30 text-text-secondary hover:text-google-red text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
-                    title="Undo this settlement"
-                  >
-                    <RotateCcw size={13} />
-                    <span>Undo</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const check = canUndoSettlementCheck(s, user, userRole, group);
+                    if (!check.allowed) {
+                      if (onShowToast) onShowToast({ message: check.reason || 'Only the payer, receiver, or group owner can undo this payment.', type: 'info' });
+                      return;
+                    }
+                    setSettlementToUndo(s);
+                  }}
+                  className={`py-1.5 px-3 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
+                    canUndoSettlement(s)
+                      ? 'bg-surface-hover hover:bg-red-500/10 border-border hover:border-red-500/30 text-text-secondary hover:text-google-red cursor-pointer'
+                      : 'bg-surface-hover/30 border-border/50 text-text-secondary/35 cursor-not-allowed'
+                  }`}
+                  title={canUndoSettlement(s) ? 'Undo this settlement' : (canUndoSettlementCheck(s, user, userRole, group).reason || 'Cannot undo')}
+                >
+                  <RotateCcw size={13} />
+                  <span>Undo</span>
+                </button>
               </div>
             </div>
           ))}
@@ -648,18 +642,24 @@ export function SplitGroupView({
                           <button
                             type="button"
                             onClick={() => {
-                              if (isSettlement && !restoreValidation.canRestore) {
-                                setSettlementConflict(restoreValidation as SettlementRestoreValidation);
+                              if (isSettlement) {
+                                const check = canRestoreSettlement(tx, user, userRole, group, transactions);
+                                if (!check.allowed) {
+                                  if (onShowToast) onShowToast({ message: check.reason || 'Cannot restore this settlement.', type: 'error' });
+                                  return;
+                                }
+                                onRestoreExpense(tx.id);
                               } else {
+                                const check = canRestoreExpense(tx, user, userRole, group, transactions);
+                                if (!check.allowed) {
+                                  if (onShowToast) onShowToast({ message: check.reason || 'Cannot restore this expense.', type: 'error' });
+                                  return;
+                                }
                                 onRestoreExpense(tx.id);
                               }
                             }}
-                            className={`px-3 py-1.5 rounded-xl font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1 shadow-xs border active:scale-95 ${
-                              isSettlement && !restoreValidation.canRestore
-                                ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/25'
-                                : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                            }`}
-                            title={isSettlement && !restoreValidation.canRestore ? 'View settlement conflict details' : 'Restore this transaction'}
+                            className="px-3 py-1.5 rounded-xl font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1 shadow-xs border active:scale-95 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                            title="Restore this transaction"
                           >
                             <RotateCcw size={12} strokeWidth={2.5} />
                             <span>Restore</span>
@@ -696,7 +696,7 @@ export function SplitGroupView({
               {/* Transactions in this Day */}
               <div className="space-y-2.5">
                 {dGroup.transactions.map((tx) => {
-                  const isCompleted = tx.settled || Boolean(statusMap[tx.id]?.isFullySettled);
+                  const isCompleted = Boolean(statusMap[tx.id]?.isFullySettled);
                   const payerKey = tx.paidBy || tx.createdBy || '';
                   const payerIsMe = isMe(payerKey);
 
@@ -741,7 +741,6 @@ export function SplitGroupView({
                   const isMemberSettledHelper = (mKey: string) => {
                     if (isCompleted) return true;
                     if (matchMemberKeys(mKey, payerKey, group, user?.uid, user?.email || undefined)) return true;
-                    if ((tx.settledMembers || []).some(k => matchMemberKeys(k, mKey, group, user?.uid, user?.email || undefined))) return true;
                     const normK = mKey.toLowerCase().trim();
                     return Boolean(statusMap[tx.id]?.settledMemberKeys?.has(normK));
                   };
@@ -778,28 +777,32 @@ export function SplitGroupView({
 
                           {!isViewer && (
                             <>
-                              {/* Desktop: Inline Edit / Delete */}
+                              {/* Desktop: Inline Edit / Delete (quietly disabled style when not allowed) */}
                               <div className="hidden sm:flex items-center gap-1 ml-1">
-                                {canEdit(tx) && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setTxToEdit(tx)}
-                                    className="w-8 h-8 rounded-full flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer transition-colors"
-                                    title="Edit Expense"
-                                  >
-                                    <Edit3 size={15} />
-                                  </button>
-                                )}
-                                {canDelete(tx) && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setTxToDelete(tx)}
-                                    className="w-8 h-8 rounded-full flex items-center justify-center text-text-secondary hover:text-google-red hover:bg-red-500/10 cursor-pointer transition-colors"
-                                    title="Delete Expense"
-                                  >
-                                    <Trash2 size={15} />
-                                  </button>
-                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditExpenseClick(tx)}
+                                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+                                    canEdit(tx)
+                                      ? 'text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer'
+                                      : 'text-text-secondary/35 hover:bg-surface-hover/50 cursor-not-allowed'
+                                  }`}
+                                  title={canEdit(tx) ? 'Edit Expense' : (canEditExpense(tx, user, userRole, group, transactions).reason || 'Cannot edit')}
+                                >
+                                  <Edit3 size={15} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteExpenseClick(tx)}
+                                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${
+                                    canDelete(tx)
+                                      ? 'text-text-secondary hover:text-google-red hover:bg-red-500/10 cursor-pointer'
+                                      : 'text-text-secondary/35 hover:bg-surface-hover/50 cursor-not-allowed'
+                                  }`}
+                                  title={canDelete(tx) ? 'Delete Expense' : (canDeleteExpense(tx, user, userRole, group, transactions).reason || 'Cannot delete')}
+                                >
+                                  <Trash2 size={15} />
+                                </button>
                               </div>
 
                               {/* Mobile: 3-dots Context Menu Button */}
@@ -1005,17 +1008,14 @@ export function SplitGroupView({
         transaction={actionMenu?.tx || null}
         anchorRect={actionMenu?.rect || null}
         isSplitGroup={true}
-        onEditExpense={actionMenu?.tx && canEdit(actionMenu.tx) ? (tx) => {
+        onEditExpense={actionMenu?.tx ? (tx) => {
           setActionMenu(null);
-          setTxToEdit(tx);
-        } : (tx) => {
-          setActionMenu(null);
-          setTxToEdit(tx);
-        }}
-        onDeleteExpense={actionMenu?.tx && canDelete(actionMenu.tx) ? (txId) => {
+          handleEditExpenseClick(tx);
+        } : undefined}
+        onDeleteExpense={actionMenu?.tx ? (txId) => {
           setActionMenu(null);
           const target = transactions.find(t => t.id === txId);
-          if (target) setTxToDelete(target);
+          if (target) handleDeleteExpenseClick(target);
           else onDeleteExpense(txId);
         } : undefined}
       />
@@ -1070,7 +1070,7 @@ export function SplitGroupView({
       {/* Delete Confirmation Modal (Context-aware for Settlement vs Settled Expense vs Standard Expense) */}
       {txToDelete && (() => {
         const isSettlement = Boolean(txToDelete.isSettlement);
-        const isSettledExpense = Boolean(txToDelete.settled || statusMap[txToDelete.id]?.isFullySettled);
+        const isSettledExpense = Boolean(statusMap[txToDelete.id]?.isFullySettled);
 
         return (
           <div 

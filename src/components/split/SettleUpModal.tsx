@@ -3,7 +3,7 @@ import { X, Check, ArrowRight, IndianRupee, AlertCircle } from 'lucide-react';
 import type { ExpenseGroup, UserRole } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { amountToIndianWords } from '../../utils/indianCurrencyWords';
-import { getGroupMembersList, recordSettlementPayment } from '../../services/splitService';
+import { getGroupMembersList, recordSettlementPayment, canMarkAsReceived } from '../../services/splitService';
 
 interface SettleUpModalProps {
   isOpen: boolean;
@@ -78,6 +78,12 @@ export function SettleUpModal({
       return;
     }
 
+    const markPerm = canMarkAsReceived(fromKey, toKey, user, userRole, group);
+    if (!markPerm.allowed) {
+      setErrorNotice(markPerm.reason || 'Only the receiver or group owner can mark this as received.');
+      return;
+    }
+
     setIsSubmitting(true);
     setErrorNotice(null);
 
@@ -89,7 +95,9 @@ export function SettleUpModal({
         numAmount,
         date,
         note.trim(),
-        user
+        user,
+        group,
+        userRole
       );
       onPaymentRecorded();
       onClose();

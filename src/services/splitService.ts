@@ -741,15 +741,11 @@ export function getPairwiseCalculationBreakdown(
     }
 
     const isAShareSettled = Boolean(
-      tx.settled ||
-      (tx.settledMembers && tx.settledMembers.some(m => matchMemberKeys(m, memberAKey, group, currentUid, currentEmail))) ||
       statusMap[tx.id]?.isFullySettled ||
       statusMap[tx.id]?.settledMemberKeys?.has(normA)
     );
 
     const isBShareSettled = Boolean(
-      tx.settled ||
-      (tx.settledMembers && tx.settledMembers.some(m => matchMemberKeys(m, memberBKey, group, currentUid, currentEmail))) ||
       statusMap[tx.id]?.isFullySettled ||
       statusMap[tx.id]?.settledMemberKeys?.has(normB)
     );
@@ -953,51 +949,8 @@ export function getPairwiseCalculationBreakdown(
 }
 
 /**
- * Automatically reconciles and marks member dues as settled on open expenses when a settlement payment occurs.
- * If all non-payer members of an expense have settled their dues, it automatically marks the entire expense as completed.
- */
-export async function autoSettleMemberExpenses(
-  groupId: string,
-  payerKey: string,
-  receiverKey: string,
-  group?: ExpenseGroup,
-  currentUid?: string,
-  currentEmail?: string
-): Promise<void> {
-  const allTxs = await getGroupExpensesOnce(groupId);
-  const defaultMembers = group 
-    ? getGroupMembersList(group, currentUid, currentEmail).map(m => m.key)
-    : [];
-
-  for (const tx of allTxs) {
-    if (tx.isSettlement || tx.settled || tx.isDeleted) continue;
-    const txPayer = tx.paidBy || tx.createdBy || '';
-    if (!matchMemberKeys(txPayer, receiverKey, group, currentUid, currentEmail)) continue;
-
-    const participants = tx.splitMembers && tx.splitMembers.length > 0 ? tx.splitMembers : defaultMembers;
-    if (!participants.some(p => matchMemberKeys(p, payerKey, group, currentUid, currentEmail))) continue;
-
-    const currentSettled = tx.settledMembers || [];
-    if (currentSettled.some(m => matchMemberKeys(m, payerKey, group, currentUid, currentEmail))) continue;
-
-    const newSettledMembers = [...currentSettled, payerKey];
-    
-    // Check if now all non-payer participants are settled
-    const nonPayers = participants.filter(p => !matchMemberKeys(p, txPayer, group, currentUid, currentEmail));
-    const allDone = nonPayers.length > 0 && nonPayers.every(p => 
-      newSettledMembers.some(k => matchMemberKeys(k, p, group, currentUid, currentEmail))
-    );
-
-    await updateExpenseInGroup(groupId, tx.id, {
-      settledMembers: newSettledMembers,
-      settled: allDone
-    });
-  }
-}
-
-/**
  * Records a debt settlement payment between two members.
- * Automatically reconciles and marks the debtor's due as paid on open expenses owed to the creditor.
+ * Pure append-only record: adds the settlement transaction without modifying other expenses.
  */
 export async function recordSettlementPayment(
   groupId: string,
@@ -1007,8 +960,15 @@ export async function recordSettlementPayment(
   date: string,
   note: string,
   user: User | null,
-  group?: ExpenseGroup
+  group?: ExpenseGroup,
+  userRole?: UserRole
 ): Promise<Transaction> {
+  const role: UserRole = userRole || (user?.uid && group?.createdBy === user.uid ? 'owner' : 'editor');
+  const markCheck = canMarkAsReceived(payer.key, receiver.key, user, role, group);
+  if (!markCheck.allowed) {
+    throw new Error(markCheck.reason || 'Only the person who receives the payment or the group owner can mark this as received.');
+  }
+
   // Always resolve canonical, real display names for persistent storage (never relative 'You')
   const canonicalPayerName = payer.name && payer.name.trim().toLowerCase() !== 'you'
     ? payer.name.trim()
@@ -1038,157 +998,7 @@ export async function recordSettlementPayment(
     user
   );
 
-  try {
-    await autoSettleMemberExpenses(groupId, payer.key, receiver.key, group, user?.uid, user?.email || undefined);
-  } catch (err) {
-    console.warn('Auto-settle reconciliation note:', err);
-  }
-
   return tx;
-}
-
-/**
- * When a settlement payment is deleted, reverts the status of expenses that were settled by it back to pending.
- */
-export async function revertSettlementOnExpenses(
-  groupId: string,
-  settlementTx: Transaction,
-  group?: ExpenseGroup,
-  currentUid?: string,
-  currentEmail?: string,
-  existingTransactions?: Transaction[]
-): Promise<Transaction[]> {
-  if (!settlementTx.isSettlement) return [];
-  const payerKey = settlementTx.paidBy || '';
-  const receiverKey = settlementTx.settledTo || '';
-
-  if (!payerKey || !receiverKey) return [];
-
-  const allTxs = (existingTransactions && existingTransactions.length > 0)
-    ? existingTransactions
-    : await getGroupExpensesOnce(groupId);
-  const updatedTxs: Transaction[] = [];
-
-  const defaultMembers = group 
-    ? getGroupMembersList(group, currentUid, currentEmail).map(m => m.key)
-    : [];
-
-  for (const tx of allTxs) {
-    if (tx.isSettlement || tx.isDeleted) continue;
-    const txPayer = tx.paidBy || tx.createdBy || '';
-    const isReceiverPayer = matchMemberKeys(txPayer, receiverKey, group, currentUid, currentEmail);
-
-    const participants = tx.splitMembers && tx.splitMembers.length > 0 ? tx.splitMembers : defaultMembers;
-    const isPayerParticipant = participants.some(p => matchMemberKeys(p, payerKey, group, currentUid, currentEmail));
-
-    if (isReceiverPayer && isPayerParticipant) {
-      const currentSettled = tx.settledMembers || [];
-      const newSettled = currentSettled.filter(k => !matchMemberKeys(k, payerKey, group, currentUid, currentEmail));
-
-      const updated: Transaction = {
-        ...tx,
-        settledMembers: newSettled,
-        settled: false,
-        note: tx.note?.toLowerCase().trim() === 'settled' ? '' : (tx.note || '')
-      };
-
-      await updateExpenseInGroup(groupId, tx.id, {
-        settledMembers: newSettled,
-        settled: false,
-        note: tx.note?.toLowerCase().trim() === 'settled' ? '' : (tx.note || '')
-      });
-
-      updatedTxs.push(updated);
-    }
-  }
-
-  return updatedTxs;
-}
-
-/**
- * Detects expenses that were marked as settled by an auto-settlement whose payment
- * was subsequently undone/deleted, and restores them to open status.
- */
-export async function reconcileOrphanedSettledExpenses(
-  groupId: string,
-  transactions: Transaction[],
-  group?: ExpenseGroup,
-  currentUid?: string,
-  currentEmail?: string
-): Promise<Transaction[]> {
-  const activeTransactions = transactions.filter(t => !t.isDeleted);
-  const settlementTxs = activeTransactions.filter(t => t.isSettlement);
-  const updatedTxs: Transaction[] = [];
-
-  for (const tx of activeTransactions) {
-    if (tx.isSettlement) continue;
-    const hasStaleSettledNote = tx.note?.toLowerCase().trim() === 'settled';
-    const payerKey = tx.paidBy || tx.createdBy || '';
-    const defaultMembers = group 
-      ? getGroupMembersList(group, currentUid, currentEmail).map(m => m.key)
-      : [];
-    const participants = tx.splitMembers && tx.splitMembers.length > 0 ? tx.splitMembers : defaultMembers;
-    const nonPayers = participants.filter(p => !matchMemberKeys(p, payerKey, group, currentUid, currentEmail));
-
-    if (nonPayers.length === 0) {
-      if (hasStaleSettledNote) {
-        const updated: Transaction = {
-          ...tx,
-          note: ''
-        };
-        await updateExpenseInGroup(groupId, tx.id, { note: '' });
-        updatedTxs.push(updated);
-      }
-      continue;
-    }
-
-    const currentSettled = tx.settledMembers || [];
-    let hasStaleSettledMember = false;
-    const newSettledMembers: string[] = [];
-
-    for (const sm of currentSettled) {
-      // Check if there is an active settlement payment supporting this member's settlement to the payer
-      const hasSupportingSettlement = settlementTxs.some(s =>
-        matchMemberKeys(s.paidBy, sm, group, currentUid, currentEmail) &&
-        matchMemberKeys(s.settledTo, payerKey, group, currentUid, currentEmail)
-      );
-
-      if (hasSupportingSettlement) {
-        newSettledMembers.push(sm);
-      } else {
-        hasStaleSettledMember = true;
-      }
-    }
-
-    const allSettledNow = nonPayers.length > 0 && nonPayers.every(p => 
-      newSettledMembers.some(k => matchMemberKeys(k, p, group, currentUid, currentEmail))
-    );
-
-    const shouldReopen = (tx.settled && !allSettledNow && settlementTxs.length === 0) || hasStaleSettledMember || hasStaleSettledNote;
-
-    if (shouldReopen) {
-      const updated: Transaction = {
-        ...tx,
-        settledMembers: newSettledMembers,
-        settled: allSettledNow,
-        note: hasStaleSettledNote ? '' : (tx.note || '')
-      };
-
-      await updateExpenseInGroup(groupId, tx.id, {
-        settledMembers: newSettledMembers,
-        settled: allDoneOrOpen(allSettledNow),
-        note: hasStaleSettledNote ? '' : (tx.note || '')
-      });
-
-      updatedTxs.push(updated);
-    }
-  }
-
-  return updatedTxs;
-}
-
-function allDoneOrOpen(val: boolean): boolean {
-  return Boolean(val);
 }
 
 export interface ReconciledExpenseStatus {
@@ -1198,42 +1008,42 @@ export interface ReconciledExpenseStatus {
 }
 
 /**
- * Computes FIFO running reconciliation across group expenses.
- * Automatically clears mutual reciprocal debts (e.g. A paid ₹1,000 for B, next day B paid ₹1,000 for A).
- * Guarantees that the Open expenses tab strictly reflects actual outstanding debts.
- * Soft-deleted items (in Trash) are strictly excluded from reconciliation calculations.
+ * Pure Single Source of Truth for Split Ledger expense status:
+ * An expense is settled when every member in it has, through subsequent payments or offsetting expenses,
+ * cleared everything they owed or were owed up to and including that expense, oldest first (FIFO).
+ * Settle, Undo, and Restore never write to expenses; status is derived deterministically from the transaction log.
  */
 export function getReconciledExpenseStatusMap(
   transactions: Transaction[],
-  group: ExpenseGroup,
+  group?: ExpenseGroup,
   currentUid?: string,
   currentEmail?: string
 ): Record<string, ReconciledExpenseStatus> {
   const result: Record<string, ReconciledExpenseStatus> = {};
   const allMembers = getGroupMembersList(group, currentUid, currentEmail);
 
-  // STRICT: Soft-deleted transactions (in Trash) must never affect active running dues or settlements!
+  // Soft-deleted transactions (in Trash) must never affect active running dues or settlements!
   const activeTransactions = transactions.filter(tx => !tx.isDeleted);
-  const activeSettlements = activeTransactions.filter(tx => tx.isSettlement);
 
-  // Initialize status for each active expense
+  // Sort strictly chronologically by full ISO timestamp down to milliseconds (createdAt/date), fallback to ID
+  const sorted = [...activeTransactions].sort((a, b) => {
+    const timeA = new Date(a.createdAt || a.date).getTime();
+    const timeB = new Date(b.createdAt || b.date).getTime();
+    if (timeA !== timeB) return timeA - timeB;
+    return a.id.localeCompare(b.id);
+  });
+
+  const getNormMemberKey = (rawKey: string): string => {
+    const found = allMembers.find(m => matchMemberKeys(m.key, rawKey, group, currentUid, currentEmail));
+    return (found ? found.key : rawKey).toLowerCase().trim();
+  };
+
+  // Initialize result entries for every active expense
   activeTransactions.forEach(tx => {
     if (tx.isSettlement) return;
+    const payerKey = getNormMemberKey(tx.paidBy || tx.createdBy || '');
     const settledSet = new Set<string>();
-    const payerKey = tx.paidBy || tx.createdBy || '';
-    if (payerKey) settledSet.add(payerKey.toLowerCase().trim());
-
-    // Only recognize a member as settled if backed by an ACTIVE supporting settlement payment
-    (tx.settledMembers || []).forEach(m => {
-      const normM = m.toLowerCase().trim();
-      const hasSupportingSettlement = activeSettlements.some(s =>
-        matchMemberKeys(s.paidBy, normM, group, currentUid, currentEmail) &&
-        matchMemberKeys(s.settledTo, payerKey, group, currentUid, currentEmail)
-      );
-      if (hasSupportingSettlement) {
-        settledSet.add(normM);
-      }
-    });
+    if (payerKey) settledSet.add(payerKey);
 
     result[tx.id] = {
       isFullySettled: false,
@@ -1242,59 +1052,134 @@ export function getReconciledExpenseStatusMap(
     };
   });
 
-  interface OpenDueRecord {
+  // Track each member's debt obligations and lending credits
+  interface MemberDebtItem {
+    txId: string;
+    creditorKey: string;
+    amount: number;
+    remaining: number;
+  }
+
+  interface MemberCreditItem {
     txId: string;
     debtorKey: string;
-    creditorKey: string;
-    originalAmount: number;
-    remainingAmount: number;
+    amount: number;
+    remaining: number;
   }
-  const openDuesMap = new Map<string, OpenDueRecord[]>();
 
-  // Sort active transactions chronologically (oldest first)
-  const sorted = [...activeTransactions].sort((a, b) => {
-    const dateA = a.date ? a.date.split('T')[0] : '';
-    const dateB = b.date ? b.date.split('T')[0] : '';
-    if (dateA !== dateB) return dateA.localeCompare(dateB);
-    const createdA = a.createdAt || a.id || '';
-    const createdB = b.createdAt || b.id || '';
-    return createdA.localeCompare(createdB);
-  });
+  const memberDebts = new Map<string, MemberDebtItem[]>();
+  const memberCredits = new Map<string, MemberCreditItem[]>();
 
-  const getNormMemberKey = (rawKey: string): string => {
-    const found = allMembers.find(m => matchMemberKeys(m.key, rawKey, group, currentUid, currentEmail));
-    return (found ? found.key : rawKey).toLowerCase().trim();
+  const getDebts = (key: string): MemberDebtItem[] => {
+    let list = memberDebts.get(key);
+    if (!list) {
+      list = [];
+      memberDebts.set(key, list);
+    }
+    return list;
   };
 
+  const getCredits = (key: string): MemberCreditItem[] => {
+    let list = memberCredits.get(key);
+    if (!list) {
+      list = [];
+      memberCredits.set(key, list);
+    }
+    return list;
+  };
+
+  // Rounding tolerance: 0.02 covers 1-paisa split rounding (e.g. 33.33 + 33.33 vs 100)
+  const ROUNDING_EPSILON = 0.02;
+
+  // Process transactions chronologically
   sorted.forEach(tx => {
-    // 1. Settlement payment: Debtor paid Creditor
+    // CASE 1: Settlement payment
     if (tx.isSettlement) {
       const payer = getNormMemberKey(tx.paidBy || tx.createdBy || '');
       const receiver = getNormMemberKey(tx.settledTo || '');
-      let credit = tx.amount || 0;
-      if (!payer || !receiver || credit <= 0) return;
+      let paymentAmount = tx.amount || 0;
+      if (!payer || !receiver || paymentAmount <= 0) return;
 
-      // 1a. Offset direct dues from payer to receiver
-      const queueKey = `${payer}__${receiver}`;
-      const queue = openDuesMap.get(queueKey) || [];
-      for (const due of queue) {
-        if (credit <= 0.01) break;
-        if (due.remainingAmount <= 0) continue;
+      // 1a. Direct clearing: payer pays receiver
+      const payerDebts = getDebts(payer);
+      for (const debt of payerDebts) {
+        if (paymentAmount <= ROUNDING_EPSILON) break;
+        if (debt.remaining <= ROUNDING_EPSILON) continue;
+        if (debt.creditorKey !== receiver) continue;
 
-        const offset = Math.min(due.remainingAmount, credit);
-        due.remainingAmount -= offset;
-        credit -= offset;
+        const pay = Math.min(debt.remaining, paymentAmount);
+        debt.remaining -= pay;
+        paymentAmount -= pay;
 
-        if (due.remainingAmount <= 0.01) {
-          result[due.txId]?.settledMemberKeys.add(due.debtorKey);
-          result[due.txId]?.clearedByOffsetMemberKeys.add(due.debtorKey);
+        // Reduce receiver's corresponding credit on that expense
+        const receiverCredits = getCredits(receiver);
+        for (const credit of receiverCredits) {
+          if (credit.txId === debt.txId && credit.debtorKey === payer && credit.remaining > ROUNDING_EPSILON) {
+            credit.remaining = Math.max(0, credit.remaining - pay);
+            break;
+          }
+        }
+
+        if (debt.remaining <= ROUNDING_EPSILON) {
+          result[debt.txId]?.settledMemberKeys.add(payer);
+        }
+      }
+
+      // 1b. Simplified / Transitive clearing: if payer paid receiver via debt simplification
+      // (e.g. B paid C because B owed A and A owed C)
+      if (paymentAmount > ROUNDING_EPSILON) {
+        // Payer pays off their oldest open debts to any member
+        for (const debt of payerDebts) {
+          if (paymentAmount <= ROUNDING_EPSILON) break;
+          if (debt.remaining <= ROUNDING_EPSILON) continue;
+
+          const pay = Math.min(debt.remaining, paymentAmount);
+          debt.remaining -= pay;
+          paymentAmount -= pay;
+
+          // Find the creditor for this debt and reduce their credit on this expense
+          const credCredits = getCredits(debt.creditorKey);
+          for (const credit of credCredits) {
+            if (credit.txId === debt.txId && credit.debtorKey === payer && credit.remaining > ROUNDING_EPSILON) {
+              credit.remaining = Math.max(0, credit.remaining - pay);
+              break;
+            }
+          }
+
+          if (debt.remaining <= ROUNDING_EPSILON) {
+            result[debt.txId]?.settledMemberKeys.add(payer);
+          }
+        }
+
+        // Receiver receives payment against their oldest open credits
+        let receiverAmount = tx.amount || 0;
+        const receiverCredits = getCredits(receiver);
+        for (const credit of receiverCredits) {
+          if (receiverAmount <= ROUNDING_EPSILON) break;
+          if (credit.remaining <= ROUNDING_EPSILON) continue;
+
+          const pay = Math.min(credit.remaining, receiverAmount);
+          credit.remaining -= pay;
+          receiverAmount -= pay;
+
+          // Also reduce the debtor's debt on this expense if not already cleared
+          const debDebts = getDebts(credit.debtorKey);
+          for (const debt of debDebts) {
+            if (debt.txId === credit.txId && debt.creditorKey === receiver && debt.remaining > ROUNDING_EPSILON) {
+              debt.remaining = Math.max(0, debt.remaining - pay);
+              if (debt.remaining <= ROUNDING_EPSILON) {
+                result[debt.txId]?.settledMemberKeys.add(credit.debtorKey);
+              }
+              break;
+            }
+          }
         }
       }
 
       return;
     }
 
-    // 2. Regular expense
+    // CASE 2: Standard Expense
     const payer = getNormMemberKey(tx.paidBy || tx.createdBy || '');
     const totalAmount = tx.amount || 0;
     if (!payer || totalAmount <= 0) return;
@@ -1318,61 +1203,83 @@ export function getReconciledExpenseStatusMap(
 
       if (cut <= 0) return;
 
-      const hasSupportingActiveSettlement = activeSettlements.some(s =>
-        matchMemberKeys(s.paidBy, pRaw, group, currentUid, currentEmail) &&
-        matchMemberKeys(s.settledTo, payer, group, currentUid, currentEmail)
-      );
-      const isAlreadySettled = Boolean(
-        hasSupportingActiveSettlement &&
-        (tx.settled || (tx.settledMembers && tx.settledMembers.some(m => matchMemberKeys(m, pRaw, group, currentUid, currentEmail))))
-      );
-      if (isAlreadySettled) {
-        result[tx.id]?.settledMemberKeys.add(p);
-        return;
-      }
-
-      // Check if payer owes p on prior open bills (Mutual offset / clearing!)
+      // Check for mutual offset: Does payer already owe p from an earlier expense?
       let remainingCut = cut;
-      const reverseQueueKey = `${payer}__${p}`; // Dues where payer owes p
-      const reverseQueue = openDuesMap.get(reverseQueueKey) || [];
+      const payerDebts = getDebts(payer);
+      for (const debt of payerDebts) {
+        if (remainingCut <= ROUNDING_EPSILON) break;
+        if (debt.remaining <= ROUNDING_EPSILON) continue;
+        if (debt.creditorKey !== p) continue;
 
-      for (const revDue of reverseQueue) {
-        if (remainingCut <= 0) break;
-        if (revDue.remainingAmount <= 0) continue;
-
-        const offset = Math.min(revDue.remainingAmount, remainingCut);
-        revDue.remainingAmount -= offset;
+        const offset = Math.min(debt.remaining, remainingCut);
+        debt.remaining -= offset;
         remainingCut -= offset;
 
-        // Payer's past due to p was cleared!
-        if (revDue.remainingAmount <= 0.01) {
-          result[revDue.txId]?.settledMemberKeys.add(revDue.debtorKey);
-          result[revDue.txId]?.clearedByOffsetMemberKeys.add(revDue.debtorKey);
+        // Reduce p's credit on that past expense
+        const pCredits = getCredits(p);
+        for (const credit of pCredits) {
+          if (credit.txId === debt.txId && credit.debtorKey === payer && credit.remaining > ROUNDING_EPSILON) {
+            credit.remaining = Math.max(0, credit.remaining - offset);
+            break;
+          }
+        }
+
+        if (debt.remaining <= ROUNDING_EPSILON) {
+          result[debt.txId]?.settledMemberKeys.add(payer);
+          result[debt.txId]?.clearedByOffsetMemberKeys.add(payer);
         }
       }
 
-      if (remainingCut <= 0.01) {
+      if (remainingCut <= ROUNDING_EPSILON) {
         result[tx.id]?.settledMemberKeys.add(p);
         result[tx.id]?.clearedByOffsetMemberKeys.add(p);
       } else {
-        const forwardQueueKey = `${p}__${payer}`;
-        const queue = openDuesMap.get(forwardQueueKey) || [];
-        queue.push({
+        getDebts(p).push({
+          txId: tx.id,
+          creditorKey: payer,
+          amount: cut,
+          remaining: remainingCut
+        });
+        getCredits(payer).push({
           txId: tx.id,
           debtorKey: p,
-          creditorKey: payer,
-          originalAmount: cut,
-          remainingAmount: remainingCut
+          amount: cut,
+          remaining: remainingCut
         });
-        openDuesMap.set(forwardQueueKey, queue);
+      }
+    });
+
+    // Check for transitive intermediaries (e.g. member who both owes and is owed)
+    allMembers.forEach(m => {
+      const mKey = m.key.toLowerCase().trim();
+      const mDebts = getDebts(mKey);
+      const mCredits = getCredits(mKey);
+
+      for (const debt of mDebts) {
+        if (debt.remaining <= ROUNDING_EPSILON) continue;
+        for (const credit of mCredits) {
+          if (debt.remaining <= ROUNDING_EPSILON) break;
+          if (credit.remaining <= ROUNDING_EPSILON) continue;
+
+          // m's credit and debt offset each other!
+          const offset = Math.min(debt.remaining, credit.remaining);
+          debt.remaining -= offset;
+          credit.remaining -= offset;
+
+          if (debt.remaining <= ROUNDING_EPSILON) {
+            result[debt.txId]?.settledMemberKeys.add(mKey);
+            result[debt.txId]?.clearedByOffsetMemberKeys.add(mKey);
+          }
+        }
       }
     });
   });
 
-  // Evaluate isFullySettled for each regular active expense
+  // Evaluate isFullySettled for every active regular expense:
+  // An expense is fully settled when all non-payer participants have their dues cleared (remaining <= ROUNDING_EPSILON),
+  // and the payer has received their reimbursement (credits remaining <= ROUNDING_EPSILON).
   activeTransactions.forEach(tx => {
     if (tx.isSettlement) return;
-
     const payer = getNormMemberKey(tx.paidBy || tx.createdBy || '');
     const participants = tx.splitMembers && tx.splitMembers.length > 0
       ? tx.splitMembers
@@ -1386,35 +1293,21 @@ export function getReconciledExpenseStatusMap(
       return;
     }
 
-    // A non-payer participant is settled if:
-    // 1. Cleared via FIFO queue from active settlement payments or mutual offset
-    // 2. Or explicit settledMembers backed by an active settlement payment between non-payer and payer
     const allNonPayersSettled = nonPayers.every(p => {
       if (result[tx.id]?.settledMemberKeys.has(p)) return true;
-      if (tx.settledMembers && tx.settledMembers.some(sm => matchMemberKeys(sm, p, group, currentUid, currentEmail))) {
-        return activeSettlements.some(s =>
-          matchMemberKeys(s.paidBy, p, group, currentUid, currentEmail) &&
-          matchMemberKeys(s.settledTo, payer, group, currentUid, currentEmail)
-        );
-      }
-      return false;
+      const pDebts = memberDebts.get(p) || [];
+      const debtItem = pDebts.find(d => d.txId === tx.id);
+      return !debtItem || debtItem.remaining <= ROUNDING_EPSILON;
     });
+
+    const payerCredits = memberCredits.get(payer) || [];
+    const txCredits = payerCredits.filter(c => c.txId === tx.id);
+    const payerReimbursed = txCredits.every(c => c.remaining <= ROUNDING_EPSILON);
 
     if (result[tx.id]) {
-      result[tx.id].isFullySettled = allNonPayersSettled;
+      result[tx.id].isFullySettled = allNonPayersSettled && payerReimbursed;
     }
   });
-
-  // Guarantee: if all simplified debts in the group are 0 (e.g. mutual reciprocal expenses like A paid 1000, B paid 1000),
-  // no phantom open expenses remain in the Open tab
-  const summary = calculateSplitGroupSummary(activeTransactions, group, currentUid, currentEmail);
-  if (summary.simplifiedDebts.length === 0) {
-    activeTransactions.forEach(tx => {
-      if (!tx.isSettlement && result[tx.id]) {
-        result[tx.id].isFullySettled = true;
-      }
-    });
-  }
 
   return result;
 }
@@ -1452,18 +1345,406 @@ export function getDaysRemainingInTrash(deletedAt?: string): number {
   return Math.max(0, 30 - elapsedDays);
 }
 
-/**
- * Separate rules for deleting transactions in a Split Ledger:
- * 1. Settlements: Only payer, recipient, or group owner can undo/delete.
- * 2. Settled Split Expenses: Only original payer or group owner can delete.
- * 3. Regular Split Expenses: Payer, creator, or group owner can delete.
- * Viewers cannot delete any transaction.
- */
+export interface OperationCheckResult {
+  allowed: boolean;
+  reason?: string;
+  isLocked?: boolean;
+  lockingSettlements?: Transaction[];
+}
+
+export interface ExpenseLockInfo {
+  isLocked: boolean;
+  lockingSettlements: Transaction[];
+  lockReasonMessage?: string;
+}
+
+export function getTxTimestamp(tx: Transaction): number {
+  if (tx.createdAt) {
+    const t = new Date(tx.createdAt).getTime();
+    if (!isNaN(t)) return t;
+  }
+  if (tx.date) {
+    const t = new Date(tx.date).getTime();
+    if (!isNaN(t)) return t;
+  }
+  return 0;
+}
+
+export function isTxAfter(a: Transaction, b: Transaction): boolean {
+  const timeA = getTxTimestamp(a);
+  const timeB = getTxTimestamp(b);
+  if (timeA !== timeB) return timeA > timeB;
+  return a.id.localeCompare(b.id) > 0;
+}
+
+export function getExpenseMemberKeys(tx: Transaction, group?: ExpenseGroup): string[] {
+  const payer = tx.paidBy || tx.createdBy || '';
+  const splits = tx.splitMembers && tx.splitMembers.length > 0 ? tx.splitMembers : [];
+  const set = new Set<string>();
+  if (payer) set.add(payer);
+  splits.forEach(s => set.add(s));
+  return Array.from(set);
+}
+
+export function isUserGroupOwner(
+  group?: ExpenseGroup | null,
+  currentUser?: { uid?: string; email?: string | null } | null
+): boolean {
+  if (!group || !currentUser) return false;
+  const myUid = (currentUser.uid || '').toLowerCase().trim();
+  const myEmail = (currentUser.email || '').toLowerCase().trim();
+  if (myUid && group.createdBy && group.createdBy.toLowerCase().trim() === myUid) return true;
+  if (myEmail && group.ownerEmail && group.ownerEmail.toLowerCase().trim() === myEmail) return true;
+  if (group.members) {
+    const mem = group.members[myUid] || group.members[myEmail];
+    if (mem && mem.role === 'owner') return true;
+  }
+  return false;
+}
+
+export function isUserExpensePayer(
+  tx: Transaction,
+  currentUser?: { uid?: string; email?: string | null } | null,
+  group?: ExpenseGroup | null
+): boolean {
+  if (!currentUser) return false;
+  const payer = tx.paidBy || tx.createdBy;
+  const myKey = currentUser.uid || currentUser.email || '';
+  return Boolean(payer && matchMemberKeys(payer, myKey, group || undefined, currentUser.uid, currentUser.email || undefined));
+}
+
+export function isUserExpenseCreator(
+  tx: Transaction,
+  currentUser?: { uid?: string; email?: string | null } | null,
+  group?: ExpenseGroup | null
+): boolean {
+  if (!currentUser) return false;
+  const creator = tx.createdBy;
+  const myKey = currentUser.uid || currentUser.email || '';
+  return Boolean(creator && matchMemberKeys(creator, myKey, group || undefined, currentUser.uid, currentUser.email || undefined));
+}
+
+export function getExpenseLockInfo(
+  expenseTx: Transaction,
+  transactions: Transaction[],
+  group?: ExpenseGroup,
+  currentUid?: string,
+  currentEmail?: string
+): ExpenseLockInfo {
+  if (expenseTx.isSettlement) {
+    return { isLocked: false, lockingSettlements: [] };
+  }
+
+  const expMembers = getExpenseMemberKeys(expenseTx, group);
+  const activeSettlements = transactions.filter(t => t.isSettlement && !t.isDeleted && t.id !== expenseTx.id);
+
+  const lockingSettlements = activeSettlements.filter(settlement => {
+    if (!isTxAfter(settlement, expenseTx)) return false;
+
+    const sPayer = settlement.paidBy || settlement.createdBy || '';
+    const sReceiver = settlement.settledTo || '';
+
+    const matchesPayer = expMembers.some(m => matchMemberKeys(m, sPayer, group, currentUid, currentEmail));
+    const matchesReceiver = expMembers.some(m => matchMemberKeys(m, sReceiver, group, currentUid, currentEmail));
+
+    return matchesPayer || matchesReceiver;
+  });
+
+  if (lockingSettlements.length === 0) {
+    return { isLocked: false, lockingSettlements: [] };
+  }
+
+  return {
+    isLocked: true,
+    lockingSettlements,
+    lockReasonMessage: 'Amount and split are locked because a payment was made after this expense. Undo the payment to change them.'
+  };
+}
+
+export function canAddExpense(
+  currentUser: { uid?: string; email?: string | null } | null,
+  userRole: UserRole,
+  group?: ExpenseGroup | null
+): OperationCheckResult {
+  if (userRole === 'viewer') {
+    return { allowed: false, reason: 'Viewers cannot add expenses.' };
+  }
+  return { allowed: true };
+}
+
+export function canEditExpense(
+  tx: Transaction,
+  currentUser: { uid?: string; email?: string | null } | null,
+  userRole: UserRole,
+  group?: ExpenseGroup | null,
+  allTransactions?: Transaction[]
+): OperationCheckResult {
+  if (userRole === 'viewer') {
+    return { allowed: false, reason: 'Viewers cannot edit expenses.' };
+  }
+
+  const isOwner = isUserGroupOwner(group, currentUser) || userRole === 'owner';
+  const isPayer = isUserExpensePayer(tx, currentUser, group);
+  const isCreator = isUserExpenseCreator(tx, currentUser, group);
+
+  if (!isOwner && !isPayer && !isCreator) {
+    const payerName = getMemberDisplayName(tx.paidBy || tx.createdBy || '', group || undefined, currentUser?.uid, currentUser?.email || undefined);
+    return {
+      allowed: false,
+      reason: `Only ${payerName} (who paid), the person who added it, or the group owner can edit this.`
+    };
+  }
+
+  return { allowed: true };
+}
+
+export function canModifyExpenseMonetaryFields(
+  tx: Transaction,
+  proposedNewSplitMembers: string[] | undefined,
+  allTransactions: Transaction[],
+  group?: ExpenseGroup | null,
+  currentUser?: { uid?: string; email?: string | null } | null
+): OperationCheckResult {
+  const lockInfo = getExpenseLockInfo(tx, allTransactions, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+  if (lockInfo.isLocked) {
+    return {
+      allowed: false,
+      isLocked: true,
+      lockingSettlements: lockInfo.lockingSettlements,
+      reason: 'Amount and split are locked because a payment was made after this expense. Undo the payment to change them.'
+    };
+  }
+
+  if (proposedNewSplitMembers && proposedNewSplitMembers.length > 0) {
+    const activeSettlements = allTransactions.filter(t => t.isSettlement && !t.isDeleted && t.id !== tx.id);
+    for (const newMemberKey of proposedNewSplitMembers) {
+      const lockSettlement = activeSettlements.find(s => {
+        if (!isTxAfter(s, tx)) return false;
+        const sPayer = s.paidBy || s.createdBy || '';
+        const sReceiver = s.settledTo || '';
+        return matchMemberKeys(newMemberKey, sPayer, group || undefined, currentUser?.uid, currentUser?.email || undefined) ||
+               matchMemberKeys(newMemberKey, sReceiver, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+      });
+
+      if (lockSettlement) {
+        const memberName = getMemberDisplayName(newMemberKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+        return {
+          allowed: false,
+          isLocked: true,
+          lockingSettlements: [lockSettlement],
+          reason: `Cannot add ${memberName} because a payment was made after this expense involving them. Undo that payment to change members.`
+        };
+      }
+    }
+  }
+
+  return { allowed: true };
+}
+
+export function canDeleteExpense(
+  tx: Transaction,
+  currentUser: { uid?: string; email?: string | null } | null,
+  userRole: UserRole,
+  group?: ExpenseGroup | null,
+  allTransactions?: Transaction[]
+): OperationCheckResult {
+  if (userRole === 'viewer') {
+    return { allowed: false, reason: 'Viewers cannot delete expenses.' };
+  }
+
+  const isOwner = isUserGroupOwner(group, currentUser) || userRole === 'owner';
+  const isPayer = isUserExpensePayer(tx, currentUser, group);
+  const isCreator = isUserExpenseCreator(tx, currentUser, group);
+
+  if (!isOwner && !isPayer && !isCreator) {
+    const payerName = getMemberDisplayName(tx.paidBy || tx.createdBy || '', group || undefined, currentUser?.uid, currentUser?.email || undefined);
+    return {
+      allowed: false,
+      reason: `Only ${payerName} (who paid), the person who added it, or the group owner can delete this.`
+    };
+  }
+
+  if (allTransactions) {
+    const lockInfo = getExpenseLockInfo(tx, allTransactions, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+    if (lockInfo.isLocked) {
+      return {
+        allowed: false,
+        isLocked: true,
+        lockingSettlements: lockInfo.lockingSettlements,
+        reason: "Can't delete. A payment was made after this expense. Undo the payment first."
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
+export function canRestoreExpense(
+  tx: Transaction,
+  currentUser: { uid?: string; email?: string | null } | null,
+  userRole: UserRole,
+  group?: ExpenseGroup | null,
+  allTransactions?: Transaction[]
+): OperationCheckResult {
+  if (userRole === 'viewer') {
+    return { allowed: false, reason: 'Viewers cannot restore expenses.' };
+  }
+
+  const isOwner = isUserGroupOwner(group, currentUser) || userRole === 'owner';
+  const isPayer = isUserExpensePayer(tx, currentUser, group);
+  const isCreator = isUserExpenseCreator(tx, currentUser, group);
+
+  if (!isOwner && !isPayer && !isCreator) {
+    const payerName = getMemberDisplayName(tx.paidBy || tx.createdBy || '', group || undefined, currentUser?.uid, currentUser?.email || undefined);
+    return {
+      allowed: false,
+      reason: `Only ${payerName} (who paid), the person who added it, or the group owner can restore this.`
+    };
+  }
+
+  if (allTransactions) {
+    const expMembers = getExpenseMemberKeys(tx, group || undefined);
+    const activeSettlements = allTransactions.filter(t => t.isSettlement && !t.isDeleted && t.id !== tx.id);
+    const lockingSettlements = activeSettlements.filter(settlement => {
+      if (!isTxAfter(settlement, tx)) return false;
+      const sPayer = settlement.paidBy || settlement.createdBy || '';
+      const sReceiver = settlement.settledTo || '';
+      return expMembers.some(m => matchMemberKeys(m, sPayer, group || undefined, currentUser?.uid, currentUser?.email || undefined)) ||
+             expMembers.some(m => matchMemberKeys(m, sReceiver, group || undefined, currentUser?.uid, currentUser?.email || undefined));
+    });
+
+    if (lockingSettlements.length > 0) {
+      const s = lockingSettlements[0];
+      const pName = getMemberDisplayName(s.paidBy || s.createdBy || '', group || undefined, currentUser?.uid, currentUser?.email || undefined);
+      const rName = getMemberDisplayName(s.settledTo || '', group || undefined, currentUser?.uid, currentUser?.email || undefined);
+      const sAmt = s.amount || 0;
+      const sDate = s.date ? new Date(s.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '';
+      return {
+        allowed: false,
+        isLocked: true,
+        lockingSettlements,
+        reason: `This expense cannot be restored because a payment was recorded after it: ${pName} → ${rName} ₹${sAmt} (${sDate}). To restore it: 1) Undo that payment in the Settled tab. 2) Restore this expense. 3) Restore the payment from Trash.`
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
+export function canMarkAsReceived(
+  payerKey: string,
+  receiverKey: string,
+  currentUser: { uid?: string; email?: string | null } | null,
+  userRole: UserRole,
+  group?: ExpenseGroup | null
+): OperationCheckResult {
+  if (userRole === 'viewer') {
+    return { allowed: false, reason: 'Viewers cannot mark debts as received.' };
+  }
+
+  const isOwner = isUserGroupOwner(group, currentUser) || userRole === 'owner';
+  const myKey = currentUser?.uid || currentUser?.email || '';
+  const isReceiver = matchMemberKeys(receiverKey, myKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+
+  if (!isOwner && !isReceiver) {
+    const receiverName = getMemberDisplayName(receiverKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+    return {
+      allowed: false,
+      reason: `Only ${receiverName} (who receives the payment) or the group owner can mark this as received.`
+    };
+  }
+
+  return { allowed: true };
+}
+
+export function canUndoSettlement(
+  settlementTx: Transaction,
+  currentUser: { uid?: string; email?: string | null } | null,
+  userRole: UserRole,
+  group?: ExpenseGroup | null
+): OperationCheckResult {
+  if (userRole === 'viewer') {
+    return { allowed: false, reason: 'Viewers cannot undo settlements.' };
+  }
+
+  const isOwner = isUserGroupOwner(group, currentUser) || userRole === 'owner';
+  const myKey = currentUser?.uid || currentUser?.email || '';
+  const isPayer = matchMemberKeys(settlementTx.paidBy || settlementTx.createdBy, myKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+  const isReceiver = matchMemberKeys(settlementTx.settledTo, myKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+
+  if (!isOwner && !isPayer && !isReceiver) {
+    const payerName = getMemberDisplayName(settlementTx.paidBy || settlementTx.createdBy || '', group || undefined, currentUser?.uid, currentUser?.email || undefined);
+    const receiverName = getMemberDisplayName(settlementTx.settledTo || '', group || undefined, currentUser?.uid, currentUser?.email || undefined);
+    return {
+      allowed: false,
+      reason: `Only ${payerName} (who sent the money), ${receiverName} (who received it), or the group owner can undo this payment.`
+    };
+  }
+
+  return { allowed: true };
+}
+
+export function canRestoreSettlement(
+  settlementTx: Transaction,
+  currentUser: { uid?: string; email?: string | null } | null,
+  userRole: UserRole,
+  group?: ExpenseGroup | null,
+  allTransactions?: Transaction[]
+): OperationCheckResult {
+  if (userRole === 'viewer') {
+    return { allowed: false, reason: 'Viewers cannot restore settlements.' };
+  }
+
+  const isOwner = isUserGroupOwner(group, currentUser) || userRole === 'owner';
+  const myKey = currentUser?.uid || currentUser?.email || '';
+  const isReceiver = matchMemberKeys(settlementTx.settledTo, myKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+
+  if (!isOwner && !isReceiver) {
+    const receiverName = getMemberDisplayName(settlementTx.settledTo || '', group || undefined, currentUser?.uid, currentUser?.email || undefined);
+    return {
+      allowed: false,
+      reason: `Only ${receiverName} (who received the payment) or the group owner can restore this payment.`
+    };
+  }
+
+  if (allTransactions) {
+    const payerKey = settlementTx.paidBy || settlementTx.createdBy || '';
+    const receiverKey = settlementTx.settledTo || '';
+    const deletedTxDeleted = settlementTx.deletedAt ? new Date(settlementTx.deletedAt).getTime() : 0;
+
+    const activeSettlements = allTransactions.filter(t => !t.isDeleted && t.isSettlement && t.id !== settlementTx.id);
+    const superseding = activeSettlements.find(s => {
+      const isPayerMatch = matchMemberKeys(s.paidBy || s.createdBy, payerKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+      const isReceiverMatch = matchMemberKeys(s.settledTo, receiverKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+      if (!isPayerMatch || !isReceiverMatch) return false;
+
+      const sCreated = s.createdAt ? new Date(s.createdAt).getTime() : 0;
+      if (sCreated && deletedTxDeleted) {
+        return sCreated > deletedTxDeleted;
+      }
+      return false;
+    });
+
+    if (superseding) {
+      const pName = getMemberDisplayName(payerKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+      const rName = getMemberDisplayName(receiverKey, group || undefined, currentUser?.uid, currentUser?.email || undefined);
+      return {
+        allowed: false,
+        reason: `A newer payment was already recorded between ${pName} and ${rName} after this was deleted.`
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
 export function evaluateTransactionDeleteRule(
   tx: Transaction,
   currentUser: { uid?: string; email?: string | null } | null,
   userRole: UserRole,
-  group?: ExpenseGroup | null
+  group?: ExpenseGroup | null,
+  isSettled?: boolean,
+  allTransactions?: Transaction[]
 ): {
   canDelete: boolean;
   isSettlement: boolean;
@@ -1471,86 +1752,32 @@ export function evaluateTransactionDeleteRule(
   requiresWarning: boolean;
   actionLabel: string;
   rejectionReason?: string;
+  isLocked?: boolean;
 } {
-  const isViewer = userRole === 'viewer';
-  const isOwner = userRole === 'owner';
-  const myUid = (currentUser?.uid || '').toLowerCase();
-  const myEmail = (currentUser?.email || '').toLowerCase().trim();
-
-  const isMe = (key?: string) => {
-    if (!key) return false;
-    const norm = key.toLowerCase().trim();
-    if (myUid && norm === myUid) return true;
-    if (myEmail && norm === myEmail) return true;
-    if (norm === 'you' || norm === 'guest' || norm === 'local_user') return true;
-    return (
-      Boolean(myUid && matchMemberKeys(key, myUid, group || undefined, myUid, myEmail)) ||
-      Boolean(myEmail && matchMemberKeys(key, myEmail, group || undefined, myUid, myEmail))
-    );
-  };
-
   const isSettlement = Boolean(tx.isSettlement);
-  const isSettledExpense = Boolean(tx.settled || (tx.settledMembers && tx.settledMembers.length > 0));
+  const isSettledExpense = Boolean(isSettled);
 
-  if (isViewer) {
-    return {
-      canDelete: false,
-      isSettlement,
-      isSettledExpense,
-      requiresWarning: false,
-      actionLabel: isSettlement ? 'Undo Settlement' : 'Delete Expense',
-      rejectionReason: 'Viewers cannot delete or modify transactions.'
-    };
-  }
-
-  // Case 1: Settlement Payment
   if (isSettlement) {
-    const isPayer = isMe(tx.paidBy || tx.createdBy);
-    const isReceiver = isMe(tx.settledTo);
-    const canDelete = isOwner || isPayer || isReceiver;
-
+    const undoCheck = canUndoSettlement(tx, currentUser, userRole, group);
     return {
-      canDelete,
+      canDelete: undoCheck.allowed,
       isSettlement: true,
       isSettledExpense: false,
       requiresWarning: true,
       actionLabel: 'Undo Settlement',
-      rejectionReason: canDelete
-        ? undefined
-        : `Only the payer (${tx.paidByName || 'Payer'}), receiver (${tx.settledToName || 'Receiver'}), or the group admin can undo this settlement.`
+      rejectionReason: undoCheck.reason
     };
   }
 
-  // Case 2: Settled Split Expense
-  if (isSettledExpense) {
-    const isPayer = isMe(tx.paidBy || tx.createdBy);
-    const canDelete = isOwner || isPayer;
-
-    return {
-      canDelete,
-      isSettlement: false,
-      isSettledExpense: true,
-      requiresWarning: true,
-      actionLabel: 'Delete Settled Expense',
-      rejectionReason: canDelete
-        ? undefined
-        : `This expense has already been settled. Only the original payer (${tx.paidByName || 'Payer'}) or group admin can delete it.`
-    };
-  }
-
-  // Case 3: Standard Open Split Expense
-  const isPayerOrCreator = isMe(tx.paidBy || tx.createdBy);
-  const canDelete = isOwner || isPayerOrCreator;
-
+  const deleteCheck = canDeleteExpense(tx, currentUser, userRole, group, allTransactions);
   return {
-    canDelete,
+    canDelete: deleteCheck.allowed,
     isSettlement: false,
-    isSettledExpense: false,
-    requiresWarning: false,
-    actionLabel: 'Delete Expense',
-    rejectionReason: canDelete
-      ? undefined
-      : `Only the payer (${tx.paidByName || 'Payer'}) or group admin can delete this expense.`
+    isSettledExpense,
+    requiresWarning: isSettledExpense || deleteCheck.isLocked || false,
+    actionLabel: deleteCheck.isLocked ? "Can't Delete (Locked)" : 'Delete Expense',
+    rejectionReason: deleteCheck.reason,
+    isLocked: deleteCheck.isLocked
   };
 }
 
@@ -1571,11 +1798,6 @@ export interface SettlementRestoreValidation {
   };
 }
 
-/**
- * Validates whether a soft-deleted settlement can safely be restored from Trash.
- * Prevents financial inconsistencies such as duplicate payments, overpayments,
- * or restoring a settlement that has already been superseded by a subsequent payment.
- */
 export function validateSettlementRestore(
   settlementTx: Transaction,
   transactions: Transaction[],
@@ -1585,7 +1807,6 @@ export function validateSettlementRestore(
 ): SettlementRestoreValidation {
   const amount = settlementTx.amount || 0;
 
-  // Non-settlements (standard split expenses) are always safe to restore
   if (!settlementTx.isSettlement) {
     return {
       canRestore: true,
@@ -1616,29 +1837,17 @@ export function validateSettlementRestore(
   const payerName = getMemberDisplayName(payerKey, group, currentUid, currentEmail);
   const receiverName = getMemberDisplayName(receiverKey, group, currentUid, currentEmail);
 
-  // Active settlements in the group (excluding soft-deleted ones and excluding this settlement itself)
+  const deletedTxDeleted = settlementTx.deletedAt ? new Date(settlementTx.deletedAt).getTime() : 0;
   const activeSettlements = transactions.filter(t => !t.isDeleted && t.isSettlement && t.id !== settlementTx.id);
 
-  // Check if a subsequent active settlement between the same parties was recorded after this deleted settlement
-  // (e.g. balances tab record has again been marked as received and created an active settlement line)
   const superseding = activeSettlements.find(s => {
     const isPayerMatch = matchMemberKeys(s.paidBy || s.createdBy, payerKey, group, currentUid, currentEmail);
     const isReceiverMatch = matchMemberKeys(s.settledTo, receiverKey, group, currentUid, currentEmail);
     if (!isPayerMatch || !isReceiverMatch) return false;
 
     const sCreated = s.createdAt ? new Date(s.createdAt).getTime() : 0;
-    const deletedTxCreated = settlementTx.createdAt ? new Date(settlementTx.createdAt).getTime() : 0;
-    const deletedTxDeleted = settlementTx.deletedAt ? new Date(settlementTx.deletedAt).getTime() : 0;
-
-    // A newer active settlement recorded after this one was deleted or created
     if (sCreated && deletedTxDeleted) {
-      return sCreated >= deletedTxDeleted - 5000;
-    }
-    if (sCreated && deletedTxCreated) {
-      return sCreated > deletedTxCreated;
-    }
-    if (s.date && settlementTx.date) {
-      return s.date > settlementTx.date;
+      return sCreated > deletedTxDeleted;
     }
     return false;
   });
@@ -1651,7 +1860,7 @@ export function validateSettlementRestore(
       canRestore: false,
       reason: 'SUPERSEDED_BY_NEWER_SETTLEMENT',
       title: 'Payment Already Settled',
-      message: `A subsequent payment of ₹${superseding.amount.toLocaleString('en-IN')} was already recorded between ${payerName} and ${receiverName} (${formattedSupersedingDate}). Restoring this deleted settlement would duplicate the payment.`,
+      message: `A subsequent payment of ₹${superseding.amount.toLocaleString('en-IN')} was already recorded between ${payerName} and ${receiverName} (${formattedSupersedingDate}) after this was deleted. Restoring this deleted settlement would duplicate the payment.`,
       payerName,
       receiverName,
       amount,
@@ -1665,7 +1874,6 @@ export function validateSettlementRestore(
     };
   }
 
-  // No superseding settlement exists: fully eligible and safe to restore!
   return {
     canRestore: true,
     title: 'Valid',

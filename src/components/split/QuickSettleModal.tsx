@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import type { ExpenseGroup, UserRole } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { recordSettlementPayment } from '../../services/splitService';
+import { recordSettlementPayment, canMarkAsReceived } from '../../services/splitService';
 import { updateGroupMemberUpi } from '../../services/expenseService';
 import { 
   formatUpiId, 
@@ -190,7 +190,8 @@ export function QuickSettleModal({
         today,
         'Settled via UPI',
         user,
-        group
+        group,
+        userRole
       );
       setShowConfirmSettle(false);
       onPaymentRecorded();
@@ -469,21 +470,33 @@ export function QuickSettleModal({
           )}
 
           {/* Subtle Secondary Helper: Zero Cognitive Load (Debtor only) */}
-          {isDebtorMe && (
-            <div className="pt-3 pb-1 border-t border-border/50 text-center">
-              <p className="text-xs text-text-secondary">
-                Already completed payment?{' '}
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmSettle(true)}
-                  className="text-emerald-600 dark:text-emerald-400 font-semibold hover:underline cursor-pointer ml-0.5 inline-flex items-center gap-1"
-                >
-                  <CheckCircle2 size={13} className="inline shrink-0" />
-                  <span>Mark as settled</span>
-                </button>
-              </p>
-            </div>
-          )}
+          {isDebtorMe && (() => {
+            const markPerm = canMarkAsReceived(debtor.key, creditor.key, user, userRole, group);
+            return (
+              <div className="pt-3 pb-1 border-t border-border/50 text-center">
+                <p className="text-xs text-text-secondary">
+                  Already completed payment?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!markPerm.allowed) {
+                        setErrorNotice(markPerm.reason || 'Only the receiver or group owner can mark as received.');
+                        return;
+                      }
+                      setShowConfirmSettle(true);
+                    }}
+                    className={markPerm.allowed 
+                      ? "text-emerald-600 dark:text-emerald-400 font-semibold hover:underline cursor-pointer ml-0.5 inline-flex items-center gap-1"
+                      : "text-text-muted opacity-60 font-semibold cursor-not-allowed ml-0.5 inline-flex items-center gap-1"}
+                    title={!markPerm.allowed ? (markPerm.reason || 'Only the receiver or group owner can mark as received.') : undefined}
+                  >
+                    <CheckCircle2 size={13} className="inline shrink-0" />
+                    <span>Mark as settled</span>
+                  </button>
+                </p>
+              </div>
+            );
+          })()}
         </div>
       </div>
 

@@ -57,13 +57,20 @@ import { InviteMemberModal } from './components/modals/InviteMemberModal';
 import { UpiReviewModal } from './components/modals/UpiReviewModal';
 import { 
   getGroupMembersList, 
-  revertSettlementOnExpenses, 
   recordSettlementPayment, 
   matchMemberKeys,
   getCanonicalMemberName,
   formatSettlementDisplayTitle,
-  autoSettleMemberExpenses,
-  validateSettlementRestore
+  validateSettlementRestore,
+  canAddExpense,
+  canEditExpense,
+  canModifyExpenseMonetaryFields,
+  canDeleteExpense,
+  canRestoreExpense,
+  canMarkAsReceived,
+  canUndoSettlement,
+  canRestoreSettlement,
+  getExpenseLockInfo
 } from './services/splitService';
 
 import type { 
@@ -2279,6 +2286,44 @@ export default function App() {
     const nowIso = new Date().toISOString();
     const editorName = user?.displayName || user?.email?.split('@')[0] || 'Member';
 
+    // Central Security & Lock Checks:
+    if (isEdit && editingTx) {
+      const editCheck = canEditExpense(editingTx, user, userRole, activeGroup, transactions);
+      if (!editCheck.allowed) {
+        showToast({
+          message: editCheck.reason || 'You do not have permission to edit this expense.',
+          type: 'error'
+        });
+        return;
+      }
+
+      const isMonetaryChanged = 
+        Math.abs((editingTx.amount || 0) - data.amount) > 0.001 ||
+        (editingTx.paidBy || '') !== data.paidBy ||
+        (editingTx.splitMode || 'equal') !== data.splitMode ||
+        JSON.stringify(editingTx.splitMembers || []) !== JSON.stringify(data.splitMembers || []);
+
+      if (isMonetaryChanged) {
+        const monCheck = canModifyExpenseMonetaryFields(editingTx, data.splitMembers, transactions, activeGroup, user);
+        if (!monCheck.allowed) {
+          showToast({
+            message: monCheck.reason || 'Amount and split are locked because a payment was made after this expense. Undo the payment to change them.',
+            type: 'error'
+          });
+          return;
+        }
+      }
+    } else {
+      const addCheck = canAddExpense(user, userRole, activeGroup);
+      if (!addCheck.allowed) {
+        showToast({
+          message: addCheck.reason || 'Viewers cannot add expenses.',
+          type: 'error'
+        });
+        return;
+      }
+    }
+
     const existingHistory = isEdit ? (editingTx?.editHistory || []) : [];
     const newEditRecord = isEdit ? [{
       editedAt: nowIso,
@@ -2490,6 +2535,27 @@ export default function App() {
     const deleterName = user?.displayName || user?.email?.split('@')[0] || 'Member';
 
     if (isSplitGroup) {
+      // Central Security & Lock Checks:
+      if (targetTx.isSettlement) {
+        const undoCheck = canUndoSettlement(targetTx, user, userRole, activeGroup);
+        if (!undoCheck.allowed) {
+          showToast({
+            message: undoCheck.reason || 'You do not have permission to undo this settlement.',
+            type: 'error'
+          });
+          return;
+        }
+      } else {
+        const delCheck = canDeleteExpense(targetTx, user, userRole, activeGroup, transactions);
+        if (!delCheck.allowed) {
+          showToast({
+            message: delCheck.reason || "Can't delete this expense.",
+            type: 'error'
+          });
+          return;
+        }
+      }
+
       // Split Group: Soft delete into Trash (kept for 30 days with full restore ability)
       const softDeletedTx: Transaction = {
         ...targetTx,
@@ -2500,40 +2566,11 @@ export default function App() {
         deletedReason: 'Deleted by member'
       };
 
-      // 1. Prepare base transaction list with the soft-deleted transaction
+      // 1. Prepare base transaction list with the soft-deleted transaction (pure append/soft-delete, never mutating other expenses)
       const currentTxs = transactionsRef.current;
-      let updatedTransactionsList = currentTxs.some(t => t.id === txId)
+      const updatedTransactionsList = currentTxs.some(t => t.id === txId)
         ? currentTxs.map(t => t.id === txId ? softDeletedTx : t)
         : [softDeletedTx, ...currentTxs.filter(t => t.id !== txId)];
-
-      // 2. If deleting a settlement transaction, synchronously revert all settled expenses in memory immediately
-      if (targetTx.isSettlement) {
-        const payerKey = targetTx.paidBy || '';
-        const receiverKey = targetTx.settledTo || '';
-        const defaultMembers = activeGroup 
-          ? getGroupMembersList(activeGroup, user?.uid, user?.email || undefined).map(m => m.key)
-          : [];
-
-        updatedTransactionsList = updatedTransactionsList.map(t => {
-          if (t.isSettlement || t.isDeleted) return t;
-          const txPayer = t.paidBy || t.createdBy || '';
-          const isReceiverPayer = matchMemberKeys(txPayer, receiverKey, activeGroup || undefined, user?.uid, user?.email || undefined);
-          const participants = t.splitMembers && t.splitMembers.length > 0 ? t.splitMembers : defaultMembers;
-          const isPayerParticipant = participants.some(p => matchMemberKeys(p, payerKey, activeGroup || undefined, user?.uid, user?.email || undefined));
-
-          if (isReceiverPayer && isPayerParticipant) {
-            const currentSettled = t.settledMembers || [];
-            const newSettled = currentSettled.filter(k => !matchMemberKeys(k, payerKey, activeGroup || undefined, user?.uid, user?.email || undefined));
-            return {
-              ...t,
-              settledMembers: newSettled,
-              settled: false,
-              note: t.note?.toLowerCase().trim() === 'settled' ? '' : (t.note || '')
-            };
-          }
-          return t;
-        });
-      }
 
       setTransactions(updatedTransactionsList);
       const currentCached = getCachedExpenses(targetGroupId);
@@ -2565,17 +2602,6 @@ export default function App() {
         }
       }
 
-      // 3. Asynchronously persist reverted expense statuses to Firestore in background
-      if (targetTx.isSettlement) {
-        revertSettlementOnExpenses(
-          targetGroupId,
-          targetTx,
-          activeGroup || undefined,
-          user?.uid,
-          user?.email || undefined,
-          transactions
-        ).catch(err => console.warn('Revert expenses note:', err));
-      }
 
       showToast({
         message: targetTx.isSettlement 
@@ -2632,21 +2658,22 @@ export default function App() {
     const targetTx = transactions.find(t => t.id === txId);
     if (!targetTx) return;
 
-    // Financial Integrity Check: If restoring a settlement, verify that the debt has not already been settled or superseded
+    // Central Security & Lock Checks:
     if (targetTx.isSettlement) {
-      const validation = validateSettlementRestore(
-        targetTx,
-        transactions,
-        activeGroup || undefined,
-        user?.uid,
-        user?.email || undefined
-      );
-      if (!validation.canRestore) {
+      const restCheck = canRestoreSettlement(targetTx, user, userRole, activeGroup, transactions);
+      if (!restCheck.allowed) {
         showToast({
-          message: validation.title,
-          subMessage: validation.message,
-          type: 'ledger',
-          duration: 5000
+          message: restCheck.reason || 'Cannot restore this settlement.',
+          type: 'error'
+        });
+        return;
+      }
+    } else {
+      const restCheck = canRestoreExpense(targetTx, user, userRole, activeGroup, transactions);
+      if (!restCheck.allowed) {
+        showToast({
+          message: restCheck.reason || 'Cannot restore this expense.',
+          type: 'error'
         });
         return;
       }
@@ -2694,17 +2721,6 @@ export default function App() {
       }
     }
 
-    // If restoring a settlement transaction, re-apply settlement to member expenses
-    if (targetTx.isSettlement && targetTx.paidBy && targetTx.settledTo) {
-      autoSettleMemberExpenses(
-        targetGroupId,
-        targetTx.paidBy,
-        targetTx.settledTo,
-        activeGroup || undefined,
-        user?.uid,
-        user?.email || undefined
-      ).catch(err => console.warn('Restore settlement note:', err));
-    }
 
     showToast({
       message: 'Restored from Trash',
@@ -4036,6 +4052,7 @@ export default function App() {
           group={activeGroup}
           userRole={userRole}
           initialTx={editingTx}
+          transactions={transactions}
           onOpenInviteModal={() => setShowInviteModal(true)}
           onAddDirectMember={async (nameOrEmail) => {
             const updated = await addDirectMemberToGroup(activeGroup, nameOrEmail, 'editor');

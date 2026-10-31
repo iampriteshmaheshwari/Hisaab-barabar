@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   User as UserIcon, 
   Smartphone, 
@@ -26,6 +26,13 @@ export function ProfileSetupModal({
   const [upiId, setUpiId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Real-time validation for UPI ID: null if empty, true if valid, false if invalid
+  const isUpiFieldValid = useMemo(() => {
+    const trimmed = upiId.trim();
+    if (!trimmed) return null;
+    return isValidUpiId(formatUpiId(trimmed));
+  }, [upiId]);
 
   useEffect(() => {
     if (isOpen && user) {
@@ -179,14 +186,22 @@ export function ProfileSetupModal({
             </div>
           </div>
 
-          {/* UPI ID Field (No optional keyword) */}
+          {/* UPI ID Field (Consistent typography & real-time validation) */}
           <div className="space-y-1">
-            <label 
-              htmlFor="profile-upi"
-              className="block text-[11px] font-semibold uppercase tracking-wider text-text-secondary"
-            >
-              UPI ID
-            </label>
+            <div className="flex items-center justify-between">
+              <label 
+                htmlFor="profile-upi"
+                className="block text-[11px] font-semibold uppercase tracking-wider text-text-secondary"
+              >
+                UPI ID
+              </label>
+              {isUpiFieldValid === true && (
+                <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                  <Check size={12} strokeWidth={2.5} />
+                  <span>Valid</span>
+                </span>
+              )}
+            </div>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-text-secondary/70">
                 <Smartphone size={16} />
@@ -195,10 +210,24 @@ export function ProfileSetupModal({
                 id="profile-upi"
                 type="text"
                 value={upiId}
-                onChange={(e) => setUpiId(e.target.value)}
-                placeholder="username@upi"
-                className="w-full h-11 pl-10 pr-3.5 rounded-xl bg-surface-hover/70 border border-border text-sm font-mono text-text-primary outline-none focus:border-google-blue focus:ring-1 focus:ring-google-blue/30 transition-all placeholder:text-text-secondary/50 placeholder:font-sans"
+                onChange={(e) => {
+                  setUpiId(e.target.value);
+                  if (errorMsg) setErrorMsg('');
+                }}
+                placeholder="username@bank"
+                className={`w-full h-11 pl-10 pr-9 rounded-xl bg-surface-hover/70 border text-sm text-text-primary outline-none transition-all font-medium placeholder:text-text-secondary/50 ${
+                  isUpiFieldValid === false && upiId.trim().length > 3
+                    ? 'border-amber-500/50 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30'
+                    : isUpiFieldValid === true
+                    ? 'border-emerald-500/40 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/30'
+                    : 'border-border focus:border-google-blue focus:ring-1 focus:ring-google-blue/30'
+                }`}
               />
+              {isUpiFieldValid === true && (
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-emerald-500 animate-in fade-in duration-150">
+                  <Check size={15} strokeWidth={2.5} />
+                </div>
+              )}
             </div>
 
             {/* Quick Handle Chips */}
@@ -208,7 +237,7 @@ export function ProfileSetupModal({
                   key={handle}
                   type="button"
                   onClick={() => handleApplyHandle(handle)}
-                  className="px-2 py-0.5 rounded-lg bg-surface border border-border hover:border-google-blue/40 text-[11px] font-mono text-text-secondary hover:text-google-blue transition-colors cursor-pointer select-none active:scale-95"
+                  className="px-2 py-0.5 rounded-lg bg-surface border border-border hover:border-google-blue/40 text-[11px] font-medium text-text-secondary hover:text-google-blue transition-colors cursor-pointer select-none active:scale-95"
                 >
                   {handle}
                 </button>
@@ -234,7 +263,7 @@ export function ProfileSetupModal({
                 onClick={handleSkipUpi}
                 className="text-xs text-text-secondary hover:text-text-primary transition-colors py-1 cursor-pointer"
               >
-                Set up UPI later
+                Add UPI ID later
               </button>
             </div>
           </div>

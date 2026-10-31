@@ -15,6 +15,7 @@ import {
   recordSettlementPayment,
   getPairwiseCalculationBreakdown,
   matchMemberKeys,
+  canMarkAsReceived,
   type PairwiseCalculationBreakdown,
   type SimplifiedDebt
 } from '../../services/splitService';
@@ -258,20 +259,34 @@ export function SplitIndividualView({
                             <span>Pay via UPI</span>
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setConfirmDebt({
-                                debtor: { key: d.fromKey, name: d.fromName },
-                                creditor: { key: d.toKey, name: d.toName },
-                                amount: d.amount
-                              });
-                            }}
-                            className="flex-1 py-2 px-3 rounded-xl bg-surface-hover hover:bg-surface-active border border-border text-xs sm:text-sm font-semibold text-text-primary cursor-pointer transition-all flex items-center justify-center gap-1.5 active:scale-95 hover:border-emerald-500/40"
-                          >
-                            <CheckCircle2 size={14} className="text-emerald-500" />
-                            <span>Record as Settled</span>
-                          </button>
+                          {(() => {
+                            const markCheck = canMarkAsReceived(d.fromKey, d.toKey, user, userRole, group);
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!markCheck.allowed) {
+                                    if (onShowToast) onShowToast({ message: markCheck.reason || 'Only the person who receives the payment or the group owner can mark this as received.', type: 'info' });
+                                    return;
+                                  }
+                                  setConfirmDebt({
+                                    debtor: { key: d.fromKey, name: d.fromName },
+                                    creditor: { key: d.toKey, name: d.toName },
+                                    amount: d.amount
+                                  });
+                                }}
+                                className={`flex-1 py-2 px-3 rounded-xl border text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 active:scale-95 transition-all ${
+                                  markCheck.allowed
+                                    ? 'bg-surface-hover hover:bg-surface-active border-border text-text-primary cursor-pointer hover:border-emerald-500/40'
+                                    : 'bg-surface-hover/30 border-border/50 text-text-secondary/35 cursor-not-allowed'
+                                }`}
+                                title={markCheck.allowed ? 'Record as Settled' : (markCheck.reason || 'Cannot record settlement')}
+                              >
+                                <CheckCircle2 size={14} className={markCheck.allowed ? 'text-emerald-500' : 'text-text-secondary/35'} />
+                                <span>Record as Settled</span>
+                              </button>
+                            );
+                          })()}
                         </div>
                       ) : (
                         <button

@@ -7,7 +7,13 @@ import {
 import type { ExpenseGroup, Transaction, UserRole } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { amountToIndianWords } from '../../utils/indianCurrencyWords';
-import { getGroupMembersList, matchMemberKeys, getMemberDisplayName } from '../../services/splitService';
+import { 
+  getGroupMembersList, 
+  matchMemberKeys, 
+  getMemberDisplayName,
+  getExpenseLockInfo,
+  canModifyExpenseMonetaryFields
+} from '../../services/splitService';
 
 interface SplitExpenseModalProps {
   isOpen: boolean;
@@ -15,6 +21,7 @@ interface SplitExpenseModalProps {
   group: ExpenseGroup;
   userRole: UserRole;
   initialTx?: Transaction | null;
+  transactions?: Transaction[];
   onOpenInviteModal?: () => void;
   onAddDirectMember?: (nameOrEmail: string) => Promise<boolean | void>;
   onSave: (data: {
@@ -36,9 +43,17 @@ export function SplitExpenseModal({
   group,
   userRole,
   initialTx,
+  transactions,
   onSave
 }: SplitExpenseModalProps) {
   const { user } = useAuth();
+
+  const lockInfo = useMemo(() => {
+    if (!initialTx || !transactions) return { isLocked: false, lockingSettlements: [] };
+    return getExpenseLockInfo(initialTx, transactions, group, user?.uid, user?.email || undefined);
+  }, [initialTx, transactions, group, user]);
+
+  const isLocked = lockInfo.isLocked;
 
   const members = useMemo(() => {
     return getGroupMembersList(group, user?.uid, user?.email || undefined);
@@ -158,6 +173,7 @@ export function SplitExpenseModal({
   }, [members, selectedMemberKeys]);
 
   const handleToggleSelectAll = () => {
+    if (isLocked) return;
     setErrorNotice(null);
     if (isAllSelected) {
       setSelectedMemberKeys([]);
@@ -173,6 +189,7 @@ export function SplitExpenseModal({
 
   // Toggle individual member
   const handleToggleMember = (key: string) => {
+    if (isLocked) return;
     setErrorNotice(null);
     const isCurrentlySelected = selectedMemberKeys.includes(key);
 
@@ -225,6 +242,21 @@ export function SplitExpenseModal({
     if (!splitEqually && Math.abs(exactDiff) > 0.05) {
       setErrorNotice(`Sum of individual cuts (₹${exactTotal}) does not match expense total (₹${numAmount}). Difference: ₹${exactDiff}`);
       return;
+    }
+
+    if (initialTx && transactions) {
+      const isMonetaryChanged = 
+        Math.abs((initialTx.amount || 0) - numAmount) > 0.001 ||
+        (initialTx.paidBy || '') !== paidBy ||
+        JSON.stringify(initialTx.splitMembers || []) !== JSON.stringify(selectedMemberKeys);
+
+      if (isMonetaryChanged) {
+        const monCheck = canModifyExpenseMonetaryFields(initialTx, selectedMemberKeys, transactions, group, user);
+        if (!monCheck.allowed) {
+          setErrorNotice(monCheck.reason || 'Amount and split are locked because a payment was made after this expense. Undo the payment to change them.');
+          return;
+        }
+      }
     }
 
     const payerMember = members.find(m => matchMemberKeys(m.key, paidBy, group, user?.uid, user?.email || undefined));
@@ -316,6 +348,13 @@ export function SplitExpenseModal({
         )}
 
         <form onSubmit={handleSubmit} className="p-5 pb-[max(1.25rem,env(safe-area-inset-bottom,0px))] overflow-y-auto no-scrollbar space-y-4 flex-1">
+          {/* Locked Note (subtle, 1-2 short sentences) */}
+          {isLocked && (
+            <div className="p-3 rounded-2xl bg-surface-hover border border-border/80 text-xs text-text-secondary leading-relaxed">
+              Amount and split are locked because a payment was made after this expense. Undo the payment to change them.
+            </div>
+          )}
+
           {/* 1. Big Amount Input: 100% Uniform with ExpenseModal */}
           <div className="py-2 text-center">
             <label className="text-xs font-medium text-text-secondary uppercase tracking-wider block mb-1">
@@ -329,9 +368,9 @@ export function SplitExpenseModal({
                 inputMode="decimal"
                 step="0.01"
                 min="0.01"
-                autoFocus
+                autoFocus={!isLocked}
                 value={amount}
-                disabled={isViewer}
+                disabled={isViewer || isLocked}
                 onChange={(e) => {
                   const val = e.target.value;
                   setAmount(val);
@@ -341,7 +380,7 @@ export function SplitExpenseModal({
                   }
                 }}
                 placeholder="0"
-                className="w-48 text-center text-4xl font-semibold tracking-tight bg-transparent outline-none text-text-primary placeholder:text-text-secondary/40"
+                className={`w-48 text-center text-4xl font-semibold tracking-tight bg-transparent outline-none text-text-primary placeholder:text-text-secondary/40 ${isLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
               />
             </div>
             {/* Dynamic Amount in Words in Indian Format */}
@@ -381,9 +420,9 @@ export function SplitExpenseModal({
               </label>
               <select
                 value={paidBy}
-                disabled={isViewer}
+                disabled={isViewer || isLocked}
                 onChange={(e) => setPaidBy(e.target.value)}
-                className="w-full px-3 py-2 rounded-2xl bg-surface-hover/70 border border-border text-base sm:text-sm text-text-primary outline-none focus:border-google-blue cursor-pointer truncate"
+                className={`w-full px-3 py-2 rounded-2xl bg-surface-hover/70 border border-border text-base sm:text-sm text-text-primary outline-none focus:border-google-blue cursor-pointer truncate ${isLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
                 {members.map(m => {
                   const payerLabel = m.isCurrentUser
@@ -431,7 +470,7 @@ export function SplitExpenseModal({
               <input
                 type="checkbox"
                 checked={splitEqually}
-                disabled={isViewer}
+                disabled={isViewer || isLocked}
                 onChange={(e) => handleToggleSplitEqually(e.target.checked)}
                 className="sr-only peer"
               />
