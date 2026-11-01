@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&display=swap');
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -18,6 +19,7 @@
   --color-border: var(--border);
 
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Google Sans", "Inter", system-ui, sans-serif;
+  --font-serif: "Newsreader", "New York", "Charter", "Playfair Display", Georgia, Cambria, "Times New Roman", serif;
 }
 
 :root {

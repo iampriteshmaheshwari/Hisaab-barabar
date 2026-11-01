@@ -14,7 +14,9 @@ import {
   Check,
   Repeat,
   MoreVertical,
-  AlertTriangle
+  AlertTriangle,
+  Download,
+  Upload
 } from 'lucide-react';
 import type { Transaction, CategoryData, UserRole } from '../../types';
 import { ICON_MAP } from '../modals/CategoryModal';
@@ -33,6 +35,9 @@ interface TransactionsTabProps {
   onSettleExpense: (tx: Transaction) => void;
   onUndoSettleExpense: (tx: Transaction) => void;
   groupName: string;
+  onOpenExportLedger?: () => void;
+  onOpenImportLedger?: () => void;
+  canImport?: boolean;
 }
 
 export type DateRangePreset = 'all' | 'today' | 'this_month' | 'this_quarter' | 'this_year' | 'custom';
@@ -93,7 +98,10 @@ export function TransactionsTab({
   onDeleteExpense,
   onSettleExpense,
   onUndoSettleExpense,
-  groupName
+  groupName,
+  onOpenExportLedger,
+  onOpenImportLedger,
+  canImport
 }: TransactionsTabProps) {
   const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
@@ -568,25 +576,39 @@ export function TransactionsTab({
           </span>
         </div>
 
-        {/* Subtle, Elegant Total in Top Right */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-text-secondary text-[11px] uppercase tracking-wider font-semibold">Total</span>
-          <span className="font-bold font-mono text-base text-text-primary tracking-tight">
-            ₹{totalFiltered.toLocaleString('en-IN')}
-          </span>
+        {/* Subtle, Elegant Total & Export action */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-1.5">
+            <span className="text-text-secondary text-[11px] uppercase tracking-wider font-semibold">Total</span>
+            <span className="font-bold font-mono text-base text-text-primary tracking-tight">
+              ₹{totalFiltered.toLocaleString('en-IN')}
+            </span>
+          </div>
+
+          {onOpenExportLedger && filteredTransactions.length > 0 && (
+            <button
+              type="button"
+              onClick={onOpenExportLedger}
+              className="h-7 px-2.5 rounded-full border border-border bg-surface hover:bg-surface-hover text-text-secondary hover:text-text-primary text-xs font-medium flex items-center gap-1 transition-all cursor-pointer select-none"
+              title="Export ledger in Excel, CSV, or PDF format"
+            >
+              <Download size={11} className="text-google-blue" />
+              <span>Export</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Transactions List with Day & Month Groupings */}
       {filteredTransactions.length === 0 ? (
-        <div className="py-14 text-center bg-surface rounded-3xl border border-border text-xs text-text-secondary space-y-2">
+        <div className="py-14 px-4 text-center bg-surface rounded-3xl border border-border text-xs text-text-secondary space-y-3">
           <p className="font-medium text-sm text-text-primary">No transactions found</p>
           <p className="text-xs text-text-secondary max-w-xs mx-auto">
             {hasActiveFilters
               ? 'No expenses match the current filter criteria.'
               : 'No transactions recorded in this ledger yet.'}
           </p>
-          {hasActiveFilters && (
+          {hasActiveFilters ? (
             <button
               type="button"
               onClick={clearAllFilters}
@@ -594,6 +616,28 @@ export function TransactionsTab({
             >
               Reset Filters
             </button>
+          ) : (
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              {userRole !== 'viewer' && (
+                <button
+                  type="button"
+                  onClick={onOpenAddExpense}
+                  className="px-4 py-2 rounded-full bg-google-blue hover:bg-blue-700 text-white text-xs font-semibold transition-all cursor-pointer shadow-xs active:scale-98"
+                >
+                  Add First Expense
+                </button>
+              )}
+              {canImport && onOpenImportLedger && userRole !== 'viewer' && (
+                <button
+                  type="button"
+                  onClick={onOpenImportLedger}
+                  className="px-4 py-2 rounded-full border border-border bg-surface hover:bg-surface-hover text-text-primary text-xs font-semibold transition-all cursor-pointer inline-flex items-center gap-1.5 shadow-2xs active:scale-98"
+                >
+                  <Upload size={13} className="text-google-blue" />
+                  <span>Import from CSV / Excel</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
       ) : (

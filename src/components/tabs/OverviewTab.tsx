@@ -5,7 +5,8 @@ import {
   ChevronRight,
   RotateCcw,
   Repeat,
-  MoreVertical
+  MoreVertical,
+  Download
 } from 'lucide-react';
 import type { Transaction, CategoryData, UserRole } from '../../types';
 import { ICON_MAP } from '../modals/CategoryModal';
@@ -29,6 +30,7 @@ interface OverviewTabProps {
   groupName: string;
   onNavigateToTransactions?: () => void;
   geminiEnabled?: boolean;
+  onOpenExportLedger?: () => void;
 }
 
 function formatDayHeading(dateStr?: string): { displayDate: string; monthKey: string; sortKey: string } {
@@ -88,7 +90,8 @@ export function OverviewTab({
   onUndoSettleExpense,
   groupName,
   onNavigateToTransactions,
-  geminiEnabled = false
+  geminiEnabled = false,
+  onOpenExportLedger
 }: OverviewTabProps) {
   const { user } = useAuth();
   const canEdit = userRole === 'owner' || userRole === 'editor';
@@ -300,16 +303,29 @@ export function OverviewTab({
           <span className="text-xs sm:text-sm font-semibold tracking-tight text-text-secondary uppercase">
             Activity for {selectedPeriod === 'current_month' ? 'This Month' : selectedPeriod === 'last_month' ? 'Last Month' : 'This Year'}
           </span>
-          {onNavigateToTransactions && (geminiEnabled || filteredTransactions.length > 4) && (
-            <button
-              type="button"
-              onClick={onNavigateToTransactions}
-              className="text-xs text-google-blue hover:underline font-semibold flex items-center gap-0.5 cursor-pointer"
-            >
-              <span>Full ledger</span>
-              <ChevronRight size={13} />
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            {onOpenExportLedger && filteredTransactions.length > 0 && (
+              <button
+                type="button"
+                onClick={onOpenExportLedger}
+                className="text-xs text-text-secondary hover:text-google-blue font-medium flex items-center gap-1 transition-colors cursor-pointer select-none"
+                title="Export this period's ledger in Excel, CSV, or PDF"
+              >
+                <Download size={12} className="text-google-blue" />
+                <span>Export</span>
+              </button>
+            )}
+            {onNavigateToTransactions && (geminiEnabled || filteredTransactions.length > 4) && (
+              <button
+                type="button"
+                onClick={onNavigateToTransactions}
+                className="text-xs text-google-blue hover:underline font-semibold flex items-center gap-0.5 cursor-pointer"
+              >
+                <span>Full ledger</span>
+                <ChevronRight size={13} />
+              </button>
+            )}
+          </div>
         </div>
 
         {filteredTransactions.length === 0 ? (

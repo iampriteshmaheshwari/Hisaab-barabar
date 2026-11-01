@@ -32,6 +32,9 @@ import { ExpenseModal } from './components/modals/ExpenseModal';
 import { RecurringModal } from './components/modals/RecurringModal';
 import { CategoryModal } from './components/modals/CategoryModal';
 import { MergeOfflineModal } from './components/modals/MergeOfflineModal';
+import { ExportLedgerModal } from './components/modals/ExportLedgerModal';
+import { ImportLedgerModal } from './components/modals/ImportLedgerModal';
+import type { ImportRowParsed } from './utils/exportLedgerUtils';
 import { OnboardingModal } from './components/modals/OnboardingModal';
 import { ProfileSetupModal } from './components/modals/ProfileSetupModal';
 import { LandingPage } from './components/LandingPage';
@@ -348,6 +351,8 @@ export default function App() {
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [categoryModalTab, setCategoryModalTab] = useState<'manage' | 'add'>('manage');
   const [showMergeModal, setShowMergeModal] = useState(false);
+  const [showExportLedgerModal, setShowExportLedgerModal] = useState(false);
+  const [showImportLedgerModal, setShowImportLedgerModal] = useState(false);
   const [hasCheckedMergeForUser, setHasCheckedMergeForUser] = useState<string | null>(null);
   const [showOnboardingModal, setShowOnboardingModal] = useState<boolean>(() => {
     try {
@@ -2265,6 +2270,83 @@ export default function App() {
     setEditingTx(null);
   };
 
+  // Handler: Batch Import Expenses into Fresh Ledger
+  const handleBatchImportExpenses = async (importedRows: ImportRowParsed[]) => {
+    if (!importedRows || importedRows.length === 0) return;
+    const targetGroupId = activeGroup?.id || activeGroupId || (groups[0]?.id) || 'local_group';
+    const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
+    const isLocal = !isCloud;
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    const groupName = (groups.find(g => g.id === targetGroupId) || activeGroup)?.name || 'Ledger';
+
+    const newTransactions: Transaction[] = [];
+    const nowIso = new Date().toISOString();
+
+    importedRows.forEach((row, idx) => {
+      const txId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}_${idx}`;
+      const creatorUid = row.matchedMember?.uid || user?.uid || 'guest';
+      const creatorName = row.matchedMember?.displayName || row.paidByName || user?.displayName || 'Member';
+
+      const newTx: Transaction = {
+        id: txId,
+        name: row.name,
+        category: row.category || 'other',
+        amount: row.amount,
+        date: row.date,
+        settled: row.settled,
+        groupId: targetGroupId,
+        createdBy: creatorUid,
+        createdByName: creatorName,
+        paidBy: row.matchedMember?.uid || row.paidByEmail,
+        paidByName: creatorName,
+        note: row.note,
+        createdAt: nowIso
+      };
+
+      newTransactions.push(newTx);
+    });
+
+    // 1. Instantly update local state & persistent cache
+    setTransactions(prev => [...newTransactions, ...prev]);
+    const currentCached = getCachedExpenses(targetGroupId);
+    setCachedExpenses(targetGroupId, [...newTransactions, ...currentCached]);
+
+    // 2. Local guest storage update if offline/guest
+    if (isLocal) {
+      setLocalTransactions(prev => {
+        const updated = [...newTransactions, ...prev];
+        try {
+          localStorage.setItem('expenses_transactions', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    }
+
+    // 3. Queue cloud sync mutations if connected to Firestore
+    if (isCloud && user) {
+      for (const tx of newTransactions) {
+        enqueueMutation({
+          type: 'ADD_EXPENSE',
+          groupId: targetGroupId,
+          targetId: tx.id,
+          payload: tx
+        }, user.uid);
+      }
+
+      if (!isOffline) {
+        syncPendingMutations(user).catch(err => console.warn('Batch import cloud sync note:', err));
+      }
+    }
+
+    const totalAmount = newTransactions.reduce((acc, t) => acc + t.amount, 0);
+
+    showToast({
+      message: `${newTransactions.length} vouchers imported`,
+      subMessage: `₹${totalAmount.toLocaleString('en-IN')} added to ${groupName}`,
+      type: 'expense'
+    });
+  };
+
   // Handler: Save Split Expense (Equal or Exact splits)
   const handleSaveSplitExpense = async (data: {
     name: string;
@@ -3701,7 +3783,14 @@ export default function App() {
               console.warn(err);
             }
           }}
-          onExploreGuest={() => setGuestMode(true)}
+          onExploreGuest={() => {
+            try {
+              localStorage.setItem('hisaab_barabar_onboarding_viewed', 'true');
+              localStorage.setItem('hisaab_guest_mode', 'true');
+            } catch {}
+            setShowOnboardingModal(false);
+            setGuestMode(true);
+          }}
           onOpenJoin={() => setShowJoinModal(true)}
           themeMode={themeMode}
           darkMode={resolvedDarkMode}
@@ -3870,6 +3959,7 @@ export default function App() {
                 groupName={activeGroup?.name || 'Group'}
                 onNavigateToTransactions={() => setActiveTab('Transactions')}
                 geminiEnabled={effectiveGeminiEnabled}
+                onOpenExportLedger={() => setShowExportLedgerModal(true)}
               />
             )}
 
@@ -3884,6 +3974,9 @@ export default function App() {
                 onSettleExpense={(tx) => setSettleTx(tx)}
                 onUndoSettleExpense={handleUndoSettle}
                 groupName={activeGroup?.name || 'Group'}
+                onOpenExportLedger={() => setShowExportLedgerModal(true)}
+                onOpenImportLedger={() => setShowImportLedgerModal(true)}
+                canImport={activeTransactions.length === 0}
               />
             )}
 
@@ -4246,6 +4339,28 @@ export default function App() {
         onClose={() => setShowInstallModal(false)}
         deferredPrompt={deferredPrompt}
         onInstallNative={handleInstallNative}
+      />
+
+      {/* Export Accounting Ledger Modal (Excel, CSV, PDF) */}
+      <ExportLedgerModal
+        isOpen={showExportLedgerModal}
+        onClose={() => setShowExportLedgerModal(false)}
+        transactions={activeTransactions}
+        categories={categories}
+        group={activeGroup}
+        currentUserName={user?.displayName || 'You'}
+        currentUserEmail={user?.email || undefined}
+      />
+
+      {/* Re-import Accounting Ledger Modal (CSV / Excel with Member Email Verification) */}
+      <ImportLedgerModal
+        isOpen={showImportLedgerModal}
+        onClose={() => setShowImportLedgerModal(false)}
+        group={activeGroup}
+        categories={categories}
+        currentUserName={user?.displayName || 'You'}
+        currentUserEmail={user?.email || undefined}
+        onBatchImport={handleBatchImportExpenses}
       />
 
       {/* Reset Local Guest Data Confirmation Dialog */}
