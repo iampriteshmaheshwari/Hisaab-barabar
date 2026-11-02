@@ -596,6 +596,18 @@ export function TransactionsTab({
               <span>Export</span>
             </button>
           )}
+
+          {canImport && onOpenImportLedger && userRole !== 'viewer' && (
+            <button
+              type="button"
+              onClick={onOpenImportLedger}
+              className="h-7 px-2.5 rounded-full border border-border bg-surface hover:bg-surface-hover text-text-secondary hover:text-text-primary text-xs font-medium flex items-center gap-1 transition-all cursor-pointer select-none"
+              title="Import ledger from CSV or Excel"
+            >
+              <Upload size={11} className="text-google-blue" />
+              <span>Import</span>
+            </button>
+          )}
         </div>
       </div>
 

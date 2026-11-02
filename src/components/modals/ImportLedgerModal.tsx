@@ -46,16 +46,28 @@ export function ImportLedgerModal({
   const [validationResult, setValidationResult] = useState<ImportValidationResult | null>(null);
   const [emailMappings, setEmailMappings] = useState<Record<string, string>>({});
   const [isImporting, setIsImporting] = useState<boolean>(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<boolean>(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  if (!isOpen) return null;
+  // Reset modal state when closed
+  React.useEffect(() => {
+    if (!isOpen) {
+      setFile(null);
+      setIsParsing(false);
+      setValidationResult(null);
+      setEmailMappings({});
+      setIsImporting(false);
+      setImportError(null);
+      setDragOver(false);
+    }
+  }, [isOpen]);
 
   const handleProcessFile = async (selectedFile: File) => {
     setFile(selectedFile);
     setIsParsing(true);
     setValidationResult(null);
     setEmailMappings({});
+    setImportError(null);
 
     try {
       const result = await parseAndValidateLedgerImport(
@@ -141,6 +153,7 @@ export function ImportLedgerModal({
   const handleConfirmImport = async () => {
     if (!validationResult || validationResult.validRows.length === 0) return;
     setIsImporting(true);
+    setImportError(null);
 
     try {
       // Apply email remappings if any
@@ -160,12 +173,15 @@ export function ImportLedgerModal({
 
       await onBatchImport(finalizedRows);
       onClose();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Batch import failed:', err);
+      setImportError(err?.message || 'Failed to import expenses. Please try again.');
     } finally {
       setIsImporting(false);
     }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 font-sans select-none overflow-y-auto">
@@ -195,13 +211,22 @@ export function ImportLedgerModal({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto space-y-4 pr-1 text-xs no-scrollbar">
-          {/* File Upload Zone */}
-          <div
+          {importError && (
+            <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-700 dark:text-rose-400 space-y-1 animate-in fade-in duration-150">
+              <div className="flex items-center gap-1.5 font-semibold text-xs">
+                <AlertCircle size={15} />
+                <span>Import Failed</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">{importError}</p>
+            </div>
+          )}
+
+          {/* File Upload Zone as native accessible label */}
+          <label
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
+            className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all block ${
               dragOver
                 ? 'border-google-blue bg-google-blue/5 scale-[1.01]'
                 : file
@@ -210,11 +235,11 @@ export function ImportLedgerModal({
             }`}
           >
             <input
-              ref={fileInputRef}
               type="file"
-              accept=".csv,.xlsx,.xls"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
               onChange={handleFileChange}
-              className="hidden"
+              onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+              className="sr-only"
             />
             <div className="flex flex-col items-center justify-center gap-2">
               <div className="w-10 h-10 rounded-2xl bg-google-blue/10 text-google-blue flex items-center justify-center shadow-xs">
@@ -229,13 +254,13 @@ export function ImportLedgerModal({
                 </p>
               </div>
             </div>
-          </div>
+          </label>
 
           {/* Loading Indicator */}
           {isParsing && (
             <div className="py-6 flex flex-col items-center justify-center gap-2 text-text-secondary">
               <Loader2 size={24} className="animate-spin text-google-blue" />
-              <span className="text-xs">Parsing vouchers and verifying member emails...</span>
+              <span className="text-xs">Parsing expenses and verifying member emails...</span>
             </div>
           )}
 

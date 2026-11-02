@@ -222,6 +222,63 @@ function resolvePayerInfo(
 }
 
 /**
+ * Helper to compile complete group members list with name and email ID
+ */
+export function getGroupMembersList(
+  group?: ExpenseGroup | null,
+  currentUserName?: string,
+  currentUserEmail?: string
+): { name: string; email: string; role?: string }[] {
+  const membersMap = new Map<string, { name: string; email: string; role?: string }>();
+
+  // If group has members map
+  if (group?.members) {
+    Object.values(group.members).forEach(m => {
+      const email = (m.email || '').trim().toLowerCase();
+      const name = m.displayName || email.split('@')[0] || 'Member';
+      if (email) {
+        membersMap.set(email, { name, email: m.email.trim(), role: m.role });
+      }
+    });
+  }
+
+  // If group has memberEmails array
+  if (group?.memberEmails) {
+    group.memberEmails.forEach(email => {
+      const lower = email.trim().toLowerCase();
+      if (lower && !membersMap.has(lower)) {
+        membersMap.set(lower, { name: email.split('@')[0] || 'Member', email: email.trim() });
+      }
+    });
+  }
+
+  // Group owner
+  if (group?.ownerEmail) {
+    const ownerLower = group.ownerEmail.trim().toLowerCase();
+    if (!membersMap.has(ownerLower)) {
+      membersMap.set(ownerLower, {
+        name: group.ownerEmail.split('@')[0] || 'Owner',
+        email: group.ownerEmail.trim(),
+        role: 'owner'
+      });
+    }
+  }
+
+  // Current user fallback if not present
+  if (currentUserEmail) {
+    const curLower = currentUserEmail.trim().toLowerCase();
+    if (!membersMap.has(curLower)) {
+      membersMap.set(curLower, {
+        name: currentUserName || currentUserEmail.split('@')[0] || 'Member',
+        email: currentUserEmail.trim()
+      });
+    }
+  }
+
+  return Array.from(membersMap.values());
+}
+
+/**
  * Export to Indian Accounting Ledger CSV format.
  * Prepends UTF-8 BOM so MS Excel renders Rupee symbols properly.
  */
@@ -236,8 +293,12 @@ export function exportLedgerToCSV(
   const filtered = filterTransactionsForExport(transactions, options);
   const groupName = group?.name || 'Expense Ledger';
   const totalAmount = filtered.reduce((acc, t) => acc + (t.amount || 0), 0);
+  const membersList = getGroupMembersList(group, currentUserName, currentUserEmail);
+  const membersFormatted = membersList.length > 0
+    ? membersList.map(m => `${m.name} (${m.email})`).join('; ')
+    : (currentUserEmail ? `${currentUserName || 'User'} (${currentUserEmail})` : 'All Members');
 
-  // CSV Headers
+  // CSV Headers (Remarks removed as requested)
   const headers = [
     'Transaction ID',
     'Date (DD/MM/YYYY)',
@@ -252,8 +313,7 @@ export function exportLedgerToCSV(
     'Debit Amount (INR)',
     'Paid By',
     'Paid By Email',
-    'Status',
-    'Remarks'
+    'Status'
   );
 
   const escapeCsv = (str: string | number | undefined | null) => {
@@ -270,6 +330,7 @@ export function exportLedgerToCSV(
   // Metadata block in Indian Accounting Ledger header
   rows.push(`"Hisaab Barabar - Indian Accounting Expense Ledger"`);
   rows.push(`"Ledger Name:",${escapeCsv(groupName)}`);
+  rows.push(`"Ledger Members:",${escapeCsv(membersFormatted)}`);
   rows.push(`"Date Range:",${escapeCsv(options.datePreset !== 'all' ? `${options.startDate || ''} to ${options.endDate || ''}` : 'All Time')}`);
   rows.push(`"Exported By:",${escapeCsv(currentUserName ? `${currentUserName} (${currentUserEmail || ''})` : (currentUserEmail || 'User'))}`);
   rows.push(`"Exported On:",${escapeCsv(new Date().toLocaleString('en-IN'))}`);
@@ -287,8 +348,6 @@ export function exportLedgerToCSV(
     const catName = categories[tx.category]?.name || tx.category || 'Other';
     const payer = resolvePayerInfo(tx, group, currentUserName, currentUserEmail);
     const status = tx.settled ? 'Settled' : 'Active';
-    const amtWords = amountToIndianWords(tx.amount || 0);
-    const remarks = tx.note && tx.note.trim().length > 0 ? tx.note.trim() : (amtWords ? `INR ${amtWords} Only` : '');
 
     const rowData: string[] = [
       txnId,
@@ -304,8 +363,7 @@ export function exportLedgerToCSV(
       Number(tx.amount || 0).toFixed(2),
       payer.name,
       payer.email,
-      status,
-      remarks
+      status
     );
 
     rows.push(rowData.map(escapeCsv).join(','));
@@ -315,7 +373,7 @@ export function exportLedgerToCSV(
   rows.push('');
   const summaryRow: string[] = ['TOTAL', '', ''];
   if (options.includeCategory) summaryRow.push('');
-  summaryRow.push(totalAmount.toFixed(2), '', '', '', `In Words: ${amountToIndianWords(totalAmount)} Only`);
+  summaryRow.push(totalAmount.toFixed(2), '', '', '');
   rows.push(summaryRow.map(escapeCsv).join(','));
 
   // Prepend UTF-8 BOM (\uFEFF)
@@ -347,6 +405,11 @@ export function exportLedgerToExcel(
   const groupName = group?.name || 'Expense Ledger';
   const totalAmount = filtered.reduce((acc, t) => acc + (t.amount || 0), 0);
 
+  const membersList = getGroupMembersList(group, currentUserName, currentUserEmail);
+  const membersFormatted = membersList.length > 0
+    ? membersList.map(m => `${m.name} (${m.email})`).join('; ')
+    : (currentUserEmail ? `${currentUserName || 'User'} (${currentUserEmail})` : 'All Members');
+
   // Create workbook
   const wb = XLSX.utils.book_new();
 
@@ -354,6 +417,7 @@ export function exportLedgerToExcel(
   const sheetData: (string | number)[][] = [
     ['HISAAB BARABAR - GENERAL EXPENSE LEDGER'],
     ['Ledger Name', groupName],
+    ['Ledger Members', membersFormatted],
     ['Date Range', options.datePreset !== 'all' ? `${options.startDate || ''} to ${options.endDate || ''}` : 'All Time'],
     ['Exported By', currentUserName ? `${currentUserName} (${currentUserEmail || ''})` : (currentUserEmail || 'User')],
     ['Generated On', new Date().toLocaleString('en-IN')],
@@ -491,6 +555,7 @@ export function exportLedgerToPrintablePDF(
   const dateRangeLabel = options.datePreset !== 'all' 
     ? `${formatIndianDate(options.startDate) || 'Start'} to ${formatIndianDate(options.endDate) || 'End'}`
     : 'All Time';
+  const membersList = getGroupMembersList(group, currentUserName, currentUserEmail);
 
   // Category breakdown calculation if category toggle is ON
   let categorySummaryHtml = '';
@@ -631,6 +696,72 @@ export function exportLedgerToPrintablePDF(
           font-weight: 700;
           color: #1e293b;
         }
+        .members-card {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          padding: 10px 14px;
+          margin-bottom: 16px;
+        }
+        .members-card-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 8px;
+          padding-bottom: 5px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .members-heading {
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #475569;
+          font-weight: 700;
+        }
+        .members-subtitle {
+          font-size: 9.5px;
+          color: #1a73e8;
+          font-weight: 600;
+        }
+        .members-chips-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+          gap: 8px;
+        }
+        .member-chip {
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          border-radius: 6px;
+          padding: 6px 10px;
+          display: flex;
+          flex-direction: column;
+        }
+        .member-name {
+          font-size: 11.5px;
+          font-weight: 600;
+          color: #0f172a;
+          line-height: 1.25;
+        }
+        .member-email {
+          font-size: 10px;
+          color: #64748b;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+          word-break: break-all;
+          line-height: 1.2;
+          margin-top: 2px;
+        }
+        .member-badge {
+          display: inline-block;
+          align-self: flex-start;
+          font-size: 8.5px;
+          text-transform: uppercase;
+          font-weight: 700;
+          color: #1a73e8;
+          background: #e8f0fe;
+          padding: 1px 5px;
+          border-radius: 4px;
+          margin-top: 4px;
+        }
         table.ledger-table {
           width: 100%;
           border-collapse: collapse;
@@ -710,6 +841,23 @@ export function exportLedgerToPrintablePDF(
         <div class="meta-item">
           <span class="meta-label">Statement Period</span>
           <span class="meta-val">${dateRangeLabel}</span>
+        </div>
+      </div>
+
+      <!-- Ledger Members with Name and Email ID at top -->
+      <div class="members-card">
+        <div class="members-card-header">
+          <span class="members-heading">Ledger Members (${membersList.length})</span>
+          <span class="members-subtitle">${group?.type === 'split' ? 'Split Ledger' : 'All Registered Members'}</span>
+        </div>
+        <div class="members-chips-grid">
+          ${membersList.map(m => `
+            <div class="member-chip">
+              <div class="member-name">${m.name}</div>
+              <div class="member-email">${m.email}</div>
+              ${m.role ? `<span class="member-badge">${m.role}</span>` : ''}
+            </div>
+          `).join('')}
         </div>
       </div>
 
@@ -816,48 +964,40 @@ export async function parseAndValidateLedgerImport(
   currentUserEmail?: string,
   currentUserName?: string
 ): Promise<ImportValidationResult> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
+  return new Promise<ImportValidationResult>(async (resolve) => {
+    try {
+      let buffer: ArrayBuffer;
+      if (typeof file.arrayBuffer === 'function') {
+        buffer = await file.arrayBuffer();
+      } else {
+        buffer = await new Promise<ArrayBuffer>((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result as ArrayBuffer);
+          reader.onerror = () => rej(new Error('Could not read file'));
+          reader.readAsArrayBuffer(file);
+        });
+      }
 
-    reader.onload = (e) => {
-      try {
-        const data = e.target?.result;
-        if (!data) {
-          resolve({
-            validRows: [],
-            totalRows: 0,
-            totalAmount: 0,
-            dateRange: { start: '', end: '' },
-            uniqueFileEmails: [],
-            matchedEmails: [],
-            unmatchedEmails: [],
-            groupMemberEmails: [],
-            canProceed: false,
-            error: 'Could not read file.'
-          });
-          return;
-        }
+      // Parse workbook using SheetJS with ArrayBuffer
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      if (!sheetName) {
+        resolve({
+          validRows: [],
+          totalRows: 0,
+          totalAmount: 0,
+          dateRange: { start: '', end: '' },
+          uniqueFileEmails: [],
+          matchedEmails: [],
+          unmatchedEmails: [],
+          groupMemberEmails: [],
+          canProceed: false,
+          error: 'The uploaded file contains no sheets.'
+        });
+        return;
+      }
 
-        // Parse workbook using SheetJS
-        const workbook = XLSX.read(data, { type: 'binary', cellDates: true });
-        const sheetName = workbook.SheetNames[0];
-        if (!sheetName) {
-          resolve({
-            validRows: [],
-            totalRows: 0,
-            totalAmount: 0,
-            dateRange: { start: '', end: '' },
-            uniqueFileEmails: [],
-            matchedEmails: [],
-            unmatchedEmails: [],
-            groupMemberEmails: [],
-            canProceed: false,
-            error: 'The uploaded file contains no sheets.'
-          });
-          return;
-        }
-
-        const sheet = workbook.Sheets[sheetName];
+      const sheet = workbook.Sheets[sheetName];
         // Read raw 2D array
         const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
 
@@ -1065,23 +1205,5 @@ export async function parseAndValidateLedgerImport(
           error: `Error parsing file: ${err?.message || 'Invalid format'}`
         });
       }
-    };
-
-    reader.onerror = () => {
-      resolve({
-        validRows: [],
-        totalRows: 0,
-        totalAmount: 0,
-        dateRange: { start: '', end: '' },
-        uniqueFileEmails: [],
-        matchedEmails: [],
-        unmatchedEmails: [],
-        groupMemberEmails: [],
-        canProceed: false,
-        error: 'Failed to read file from disk.'
-      });
-    };
-
-    reader.readAsBinaryString(file);
-  });
+    });
 }

@@ -2341,7 +2341,7 @@ export default function App() {
     const totalAmount = newTransactions.reduce((acc, t) => acc + t.amount, 0);
 
     showToast({
-      message: `${newTransactions.length} vouchers imported`,
+      message: `${newTransactions.length} expenses imported`,
       subMessage: `₹${totalAmount.toLocaleString('en-IN')} added to ${groupName}`,
       type: 'expense'
     });
