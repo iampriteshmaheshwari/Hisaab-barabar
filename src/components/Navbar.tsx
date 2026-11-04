@@ -432,6 +432,12 @@ export function Navbar({
                           type="button"
                           onClick={async () => {
                             setShowGroupMenu(false);
+                            if (!user) {
+                              if (onOpenInviteModal) {
+                                onOpenInviteModal();
+                              }
+                              return;
+                            }
                             const notifyFn = (msg: string) => {
                               if (onShowToast) {
                                 onShowToast({ message: msg, type: 'info' });

@@ -142,13 +142,17 @@ export function formatIndianDate(dateStr?: string): string {
  */
 export function parseIndianDateToIso(dateStr: string): string {
   if (!dateStr) return new Date().toISOString().split('T')[0];
-  const trimmed = dateStr.trim();
+  const trimmed = dateStr.trim().replace(/^["']+|["']+$/g, '');
   // Check DD/MM/YYYY or DD-MM-YYYY
-  const slashMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  const slashMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
   if (slashMatch) {
     const day = slashMatch[1].padStart(2, '0');
     const month = slashMatch[2].padStart(2, '0');
-    const year = slashMatch[3];
+    let year = slashMatch[3];
+    if (year.length === 2) {
+      const yNum = parseInt(year, 10);
+      year = String(yNum < 50 ? 2000 + yNum : 1900 + yNum);
+    }
     return `${year}-${month}-${day}`;
   }
   // Check ISO YYYY-MM-DD
@@ -928,14 +932,26 @@ export function exportLedgerToPrintablePDF(
 
 /**
  * Re-import Parser & Validator
- * Reads CSV or Excel file, validates that all paid-by email addresses match members of the target group.
+ * Reads CSV or Excel file, validates that all paid-by email addresses match members of the target group
+ * and intelligently matches categories against the ledger's existing categories.
  */
+export interface CategoryMatchInfo {
+  fileCategory: string;
+  matchedKey?: string;
+  matchedName?: string;
+  isMatched: boolean;
+  count: number;
+  totalAmount: number;
+}
+
 export interface ImportRowParsed {
   rowNumber: number;
   name: string;
   amount: number;
   date: string; // YYYY-MM-DD
-  category: string;
+  category: string; // resolved category key
+  rawCategory: string; // original category string from uploaded file
+  isCategoryMatched: boolean;
   paidByName: string;
   paidByEmail: string;
   matchedMember?: GroupMember;
@@ -954,13 +970,174 @@ export interface ImportValidationResult {
   matchedEmails: string[];
   unmatchedEmails: string[];
   groupMemberEmails: string[];
+  categoryMatches: CategoryMatchInfo[];
+  unmatchedCategories: string[];
   canProceed: boolean;
   error?: string;
+}
+
+const MONTH_NAME_MAP: Record<string, string> = {
+  jan: '01', january: '01',
+  feb: '02', february: '02',
+  mar: '03', march: '03',
+  apr: '04', april: '04',
+  may: '05',
+  jun: '06', june: '06',
+  jul: '07', july: '07',
+  aug: '08', august: '08',
+  sep: '09', september: '09', sept: '09',
+  oct: '10', october: '10',
+  nov: '11', november: '11',
+  dec: '12', december: '12'
+};
+
+/**
+ * Accurately parses dates from CSV and Excel imports without US Month/Day inversion.
+ * Ensures 1/10/2026 (DD/MM/YYYY) is parsed as 2026-10-01 (1st October), not 2026-01-10.
+ * Completely dynamic across any day, month, year, delimiter, and format.
+ */
+export function parseImportedDateToIso(rawDate: any): string {
+  if (rawDate === null || rawDate === undefined || rawDate === '') {
+    return new Date().toISOString().split('T')[0];
+  }
+
+  // 1. If it's a numeric Excel serial date code (e.g. 46296)
+  if (typeof rawDate === 'number' && !isNaN(rawDate)) {
+    try {
+      const parsed = XLSX.SSF.parse_date_code(rawDate);
+      if (parsed && parsed.y && parsed.m && parsed.d) {
+        const y = String(parsed.y);
+        const m = String(parsed.m).padStart(2, '0');
+        const d = String(parsed.d).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      }
+    } catch {}
+  }
+
+  // 2. If it's a Date instance (from JS runtime or SheetJS)
+  if (rawDate instanceof Date && !isNaN(rawDate.getTime())) {
+    const y = rawDate.getUTCFullYear();
+    const m = String(rawDate.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(rawDate.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  // 3. String representation
+  let str = String(rawDate).trim().replace(/^["']+|["']+$/g, '');
+  if (!str) return new Date().toISOString().split('T')[0];
+
+  // 3a. Standard Indian DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+  const dmyMatch = str.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})/);
+  if (dmyMatch) {
+    const day = dmyMatch[1].padStart(2, '0');
+    const month = dmyMatch[2].padStart(2, '0');
+    let year = dmyMatch[3];
+    if (year.length === 2) {
+      const yNum = parseInt(year, 10);
+      year = String(yNum < 50 ? 2000 + yNum : 1900 + yNum);
+    }
+    const mNum = parseInt(month, 10);
+    const dNum = parseInt(day, 10);
+    if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31) {
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  // 3b. Month name formats: '01-Oct-2026', '1 October 2026', '01 Oct 26'
+  const textMonthMatch = str.match(/^(\d{1,2})[\s\-/]+([A-Za-z]+)[\s\-/]+(\d{2,4})/);
+  if (textMonthMatch) {
+    const day = textMonthMatch[1].padStart(2, '0');
+    const monthKey = textMonthMatch[2].toLowerCase();
+    let year = textMonthMatch[3];
+    if (year.length === 2) {
+      const yNum = parseInt(year, 10);
+      year = String(yNum < 50 ? 2000 + yNum : 1900 + yNum);
+    }
+    const monthNum = MONTH_NAME_MAP[monthKey];
+    if (monthNum) {
+      return `${year}-${monthNum}-${day}`;
+    }
+  }
+
+  // 3c. ISO YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+  const ymdMatch = str.match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})/);
+  if (ymdMatch) {
+    const year = ymdMatch[1];
+    const month = ymdMatch[2].padStart(2, '0');
+    const day = ymdMatch[3].padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  return parseIndianDateToIso(str);
+}
+
+/**
+ * Matches an imported category string against the ledger's existing category map.
+ * Handles casing differences, display name matching, and common aliases.
+ */
+export function matchCategoryKey(
+  rawCatName: string,
+  categories: Record<string, CategoryData>
+): { matchedKey?: string; matchedName?: string; isMatched: boolean } {
+  if (!rawCatName || !rawCatName.trim()) {
+    return { matchedKey: 'other', matchedName: categories['other']?.name || 'Other', isMatched: true };
+  }
+
+  const cleanRaw = rawCatName.trim();
+  const lowerRaw = cleanRaw.toLowerCase();
+  const normRaw = lowerRaw.replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+
+  // 1. Direct key match (e.g. 'food' === 'food')
+  if (categories[lowerRaw]) {
+    return {
+      matchedKey: lowerRaw,
+      matchedName: categories[lowerRaw].name,
+      isMatched: true
+    };
+  }
+
+  // 2. Direct name match (e.g. 'Food & Dining' === 'food & dining')
+  for (const [key, catData] of Object.entries(categories)) {
+    if (catData.name.toLowerCase() === lowerRaw) {
+      return {
+        matchedKey: key,
+        matchedName: catData.name,
+        isMatched: true
+      };
+    }
+  }
+
+  // 3. Normalized name match (stripping punctuation, '&' vs 'and', etc.)
+  for (const [key, catData] of Object.entries(categories)) {
+    const normName = catData.name.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+    if (normName === normRaw) {
+      return {
+        matchedKey: key,
+        matchedName: catData.name,
+        isMatched: true
+      };
+    }
+  }
+
+  // 4. Common standard category aliases
+  if (normRaw === 'food' && categories['food']) return { matchedKey: 'food', matchedName: categories['food'].name, isMatched: true };
+  if ((normRaw === 'travel' || normRaw === 'commute') && categories['travel']) return { matchedKey: 'travel', matchedName: categories['travel'].name, isMatched: true };
+  if ((normRaw === 'shopping' || normRaw === 'groceries' || normRaw === 'grocery') && categories['shopping']) return { matchedKey: 'shopping', matchedName: categories['shopping'].name, isMatched: true };
+  if ((normRaw === 'bills' || normRaw === 'utilities') && categories['bills']) return { matchedKey: 'bills', matchedName: categories['bills'].name, isMatched: true };
+  if (normRaw === 'entertainment' && categories['entertainment']) return { matchedKey: 'entertainment', matchedName: categories['entertainment'].name, isMatched: true };
+  if ((normRaw === 'medical' || normRaw === 'health' || normRaw === 'healthcare') && categories['medical']) return { matchedKey: 'medical', matchedName: categories['medical'].name, isMatched: true };
+
+  return {
+    matchedKey: undefined,
+    matchedName: undefined,
+    isMatched: false
+  };
 }
 
 export async function parseAndValidateLedgerImport(
   file: File,
   group: ExpenseGroup | null,
+  categories: Record<string, CategoryData> = {},
   currentUserEmail?: string,
   currentUserName?: string
 ): Promise<ImportValidationResult> {
@@ -978,8 +1155,9 @@ export async function parseAndValidateLedgerImport(
         });
       }
 
-      // Parse workbook using SheetJS with ArrayBuffer
-      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+      // Parse workbook using SheetJS with raw: true and cellDates: false to keep raw DD/MM/YYYY text intact.
+      // CRITICAL: Passing raw: true prevents SheetJS from auto-converting DD/MM dates into US MM/DD serial numbers.
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: false, raw: true });
       const sheetName = workbook.SheetNames[0];
       if (!sheetName) {
         resolve({
@@ -991,6 +1169,8 @@ export async function parseAndValidateLedgerImport(
           matchedEmails: [],
           unmatchedEmails: [],
           groupMemberEmails: [],
+          categoryMatches: [],
+          unmatchedCategories: [],
           canProceed: false,
           error: 'The uploaded file contains no sheets.'
         });
@@ -998,200 +1178,9 @@ export async function parseAndValidateLedgerImport(
       }
 
       const sheet = workbook.Sheets[sheetName];
-        // Read raw 2D array
-        const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      const rawRows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
 
-        if (!rawRows || rawRows.length === 0) {
-          resolve({
-            validRows: [],
-            totalRows: 0,
-            totalAmount: 0,
-            dateRange: { start: '', end: '' },
-            uniqueFileEmails: [],
-            matchedEmails: [],
-            unmatchedEmails: [],
-            groupMemberEmails: [],
-            canProceed: false,
-            error: 'The uploaded file is empty.'
-          });
-          return;
-        }
-
-        // Find header row: look for row containing 'Particulars' or 'Expense' or 'Date' or 'Debit'
-        let headerRowIdx = -1;
-        for (let i = 0; i < Math.min(rawRows.length, 15); i++) {
-          const rowStr = rawRows[i].map(c => String(c).toLowerCase().trim());
-          if (
-            (rowStr.includes('particulars') || rowStr.includes('expense') || rowStr.includes('item') || rowStr.includes('name')) &&
-            (rowStr.some(c => c.includes('date')) || rowStr.some(c => c.includes('debit') || c.includes('amount')))
-          ) {
-            headerRowIdx = i;
-            break;
-          }
-        }
-
-        if (headerRowIdx === -1) {
-          // If no explicit header matched, assume row 0 if it has strings
-          headerRowIdx = 0;
-        }
-
-        const headerCols = rawRows[headerRowIdx].map(c => String(c).toLowerCase().trim());
-
-        // Map column indices
-        const findCol = (...keywords: string[]) => {
-          return headerCols.findIndex(col => keywords.some(k => col.includes(k)));
-        };
-
-        const voucherIdx = findCol('transaction id', 'txn id', 'id', 'voucher', 'ref');
-        const dateIdx = findCol('date');
-        const particularsIdx = findCol('particulars', 'expense', 'item', 'name', 'description');
-        const categoryIdx = findCol('category');
-        const amountIdx = findCol('debit', 'amount', 'cost', 'price', 'inr');
-        const paidByNameIdx = findCol('paid by', 'payer', 'member');
-        const paidByEmailIdx = findCol('email', 'mail');
-        const statusIdx = findCol('status');
-        const remarksIdx = findCol('remarks', 'note', 'comment');
-
-        // Compile set of all group member emails
-        const groupEmails = new Set<string>();
-        if (group?.memberEmails) {
-          group.memberEmails.forEach(m => m && groupEmails.add(m.trim().toLowerCase()));
-        }
-        if (group?.members) {
-          Object.values(group.members).forEach(m => {
-            if (m.email) groupEmails.add(m.email.trim().toLowerCase());
-          });
-        }
-        if (group?.ownerEmail) {
-          groupEmails.add(group.ownerEmail.trim().toLowerCase());
-        }
-        if (currentUserEmail) {
-          groupEmails.add(currentUserEmail.trim().toLowerCase());
-        }
-
-        const groupMemberEmailsArray = Array.from(groupEmails);
-
-        const parsedRows: ImportRowParsed[] = [];
-        const fileEmails = new Set<string>();
-        let minDate = '';
-        let maxDate = '';
-
-        for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
-          const row = rawRows[r];
-          if (!row || row.length === 0) continue;
-
-          // Check if this row is a TOTAL summary row
-          const firstCol = String(row[0] || '').trim().toUpperCase();
-          if (firstCol === 'TOTAL' || firstCol.startsWith('TOTAL ') || firstCol.includes('AMOUNT IN WORDS')) {
-            continue;
-          }
-
-          // Extract particulars
-          const particulars = particularsIdx !== -1 && row[particularsIdx] ? String(row[particularsIdx]).trim() : '';
-          if (!particulars) continue; // Skip blank rows
-
-          // Extract amount
-          let rawAmount = amountIdx !== -1 ? row[amountIdx] : 0;
-          if (typeof rawAmount === 'string') {
-            rawAmount = rawAmount.replace(/[^0-9.-]/g, '');
-          }
-          const numAmount = parseFloat(rawAmount) || 0;
-          if (numAmount <= 0) continue; // Skip zero or invalid rows
-
-          // Extract date
-          let isoDate = new Date().toISOString().split('T')[0];
-          if (dateIdx !== -1 && row[dateIdx]) {
-            const rawDate = row[dateIdx];
-            if (rawDate instanceof Date) {
-              isoDate = rawDate.toISOString().split('T')[0];
-            } else {
-              isoDate = parseIndianDateToIso(String(rawDate));
-            }
-          }
-
-          if (!minDate || isoDate < minDate) minDate = isoDate;
-          if (!maxDate || isoDate > maxDate) maxDate = isoDate;
-
-          // Extract category
-          const rawCat = categoryIdx !== -1 && row[categoryIdx] ? String(row[categoryIdx]).trim().toLowerCase() : 'other';
-
-          // Extract payer name and email
-          const pName = paidByNameIdx !== -1 && row[paidByNameIdx] ? String(row[paidByNameIdx]).trim() : (currentUserName || 'Member');
-          let pEmail = paidByEmailIdx !== -1 && row[paidByEmailIdx] ? String(row[paidByEmailIdx]).trim().toLowerCase() : '';
-
-          // If no email column was provided in file, fallback to current user's email
-          if (!pEmail && currentUserEmail) {
-            pEmail = currentUserEmail.toLowerCase();
-          }
-
-          if (pEmail) {
-            fileEmails.add(pEmail);
-          }
-
-          const isEmailMatched = pEmail ? groupEmails.has(pEmail) : true;
-
-          // Find matched GroupMember if available
-          let matchedMember: GroupMember | undefined;
-          if (group?.members && pEmail) {
-            matchedMember = Object.values(group.members).find(m => m.email.toLowerCase() === pEmail);
-          }
-
-          // Status & notes
-          const rawStatus = statusIdx !== -1 && row[statusIdx] ? String(row[statusIdx]).toLowerCase() : '';
-          const settled = rawStatus.includes('settled') || rawStatus.includes('paid');
-          const note = remarksIdx !== -1 && row[remarksIdx] ? String(row[remarksIdx]).trim() : undefined;
-          const voucherNo = voucherIdx !== -1 && row[voucherIdx] ? String(row[voucherIdx]).trim() : undefined;
-
-          parsedRows.push({
-            rowNumber: r + 1,
-            name: particulars,
-            amount: numAmount,
-            date: isoDate,
-            category: rawCat || 'other',
-            paidByName: pName,
-            paidByEmail: pEmail,
-            matchedMember,
-            isEmailMatched,
-            settled,
-            note,
-            voucherNo
-          });
-        }
-
-        if (parsedRows.length === 0) {
-          resolve({
-            validRows: [],
-            totalRows: 0,
-            totalAmount: 0,
-            dateRange: { start: '', end: '' },
-            uniqueFileEmails: [],
-            matchedEmails: [],
-            unmatchedEmails: [],
-            groupMemberEmails: groupMemberEmailsArray,
-            canProceed: false,
-            error: 'No valid transaction rows found in the uploaded file.'
-          });
-          return;
-        }
-
-        const uniqueFileEmails = Array.from(fileEmails);
-        const matchedEmails = uniqueFileEmails.filter(e => groupEmails.has(e));
-        const unmatchedEmails = uniqueFileEmails.filter(e => !groupEmails.has(e));
-
-        const totalAmount = parsedRows.reduce((acc, r) => acc + r.amount, 0);
-
-        resolve({
-          validRows: parsedRows,
-          totalRows: parsedRows.length,
-          totalAmount,
-          dateRange: { start: minDate, end: maxDate },
-          uniqueFileEmails,
-          matchedEmails,
-          unmatchedEmails,
-          groupMemberEmails: groupMemberEmailsArray,
-          canProceed: unmatchedEmails.length === 0
-        });
-      } catch (err: any) {
+      if (!rawRows || rawRows.length === 0) {
         resolve({
           validRows: [],
           totalRows: 0,
@@ -1201,9 +1190,234 @@ export async function parseAndValidateLedgerImport(
           matchedEmails: [],
           unmatchedEmails: [],
           groupMemberEmails: [],
+          categoryMatches: [],
+          unmatchedCategories: [],
           canProceed: false,
-          error: `Error parsing file: ${err?.message || 'Invalid format'}`
+          error: 'The uploaded file is empty.'
+        });
+        return;
+      }
+
+      // Find header row: look for row containing 'Particulars' or 'Expense' or 'Date' or 'Debit'
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(rawRows.length, 15); i++) {
+        const rowStr = rawRows[i].map(c => String(c).toLowerCase().trim());
+        if (
+          (rowStr.includes('particulars') || rowStr.includes('expense') || rowStr.includes('item') || rowStr.includes('name')) &&
+          (rowStr.some(c => c.includes('date')) || rowStr.some(c => c.includes('debit') || c.includes('amount')))
+        ) {
+          headerRowIdx = i;
+          break;
+        }
+      }
+
+      if (headerRowIdx === -1) {
+        headerRowIdx = 0;
+      }
+
+      const headerCols = rawRows[headerRowIdx].map(c => String(c).toLowerCase().trim());
+
+      // Map column indices
+      const findCol = (...keywords: string[]) => {
+        return headerCols.findIndex(col => keywords.some(k => col.includes(k)));
+      };
+
+      const voucherIdx = findCol('transaction id', 'txn id', 'id', 'voucher', 'ref');
+      const dateIdx = findCol('date');
+      const particularsIdx = findCol('particulars', 'expense', 'item', 'name', 'description');
+      const categoryIdx = findCol('category');
+      const amountIdx = findCol('debit', 'amount', 'cost', 'price', 'inr');
+      const paidByNameIdx = findCol('paid by', 'payer', 'member');
+      const paidByEmailIdx = findCol('email', 'mail');
+      const statusIdx = findCol('status');
+      const remarksIdx = findCol('remarks', 'note', 'comment');
+
+      // Compile set of all group member emails
+      const groupEmails = new Set<string>();
+      if (group?.memberEmails) {
+        group.memberEmails.forEach(m => m && groupEmails.add(m.trim().toLowerCase()));
+      }
+      if (group?.members) {
+        Object.values(group.members).forEach(m => {
+          if (m.email) groupEmails.add(m.email.trim().toLowerCase());
         });
       }
-    });
+      if (group?.ownerEmail) {
+        groupEmails.add(group.ownerEmail.trim().toLowerCase());
+      }
+      if (currentUserEmail) {
+        groupEmails.add(currentUserEmail.trim().toLowerCase());
+      }
+
+      const groupMemberEmailsArray = Array.from(groupEmails);
+
+      const parsedRows: ImportRowParsed[] = [];
+      const fileEmails = new Set<string>();
+      const categoryStats = new Map<string, { rawName: string; count: number; totalAmount: number; matchedKey?: string; matchedName?: string; isMatched: boolean }>();
+      let minDate = '';
+      let maxDate = '';
+
+      for (let r = headerRowIdx + 1; r < rawRows.length; r++) {
+        const row = rawRows[r];
+        if (!row || row.length === 0) continue;
+
+        // Check if this row is a TOTAL summary row
+        const firstCol = String(row[0] || '').trim().toUpperCase();
+        if (firstCol === 'TOTAL' || firstCol.startsWith('TOTAL ') || firstCol.includes('AMOUNT IN WORDS')) {
+          continue;
+        }
+
+        // Extract particulars
+        const particulars = particularsIdx !== -1 && row[particularsIdx] ? String(row[particularsIdx]).trim() : '';
+        if (!particulars) continue; // Skip blank rows
+
+        // Extract amount
+        let rawAmount = amountIdx !== -1 ? row[amountIdx] : 0;
+        if (typeof rawAmount === 'string') {
+          rawAmount = rawAmount.replace(/[^0-9.-]/g, '');
+        }
+        const numAmount = parseFloat(rawAmount) || 0;
+        if (numAmount <= 0) continue; // Skip zero or invalid rows
+
+        // Extract date using reliable date parser
+        const isoDate = dateIdx !== -1 && row[dateIdx] !== undefined 
+          ? parseImportedDateToIso(row[dateIdx])
+          : new Date().toISOString().split('T')[0];
+
+        if (!minDate || isoDate < minDate) minDate = isoDate;
+        if (!maxDate || isoDate > maxDate) maxDate = isoDate;
+
+        // Extract category with intelligent matching
+        const rawCatString = categoryIdx !== -1 && row[categoryIdx] ? String(row[categoryIdx]).trim() : 'Other';
+        const catMatch = matchCategoryKey(rawCatString, categories);
+        const resolvedCategoryKey = catMatch.matchedKey || rawCatString.toLowerCase().replace(/[^a-z0-9]/g, '_') || 'other';
+
+        // Track category stats
+        const catKeyForMap = rawCatString.toLowerCase().trim();
+        const existingStat = categoryStats.get(catKeyForMap);
+        if (existingStat) {
+          existingStat.count += 1;
+          existingStat.totalAmount += numAmount;
+        } else {
+          categoryStats.set(catKeyForMap, {
+            rawName: rawCatString,
+            count: 1,
+            totalAmount: numAmount,
+            matchedKey: catMatch.matchedKey,
+            matchedName: catMatch.matchedName,
+            isMatched: catMatch.isMatched
+          });
+        }
+
+        // Extract payer name and email
+        const pName = paidByNameIdx !== -1 && row[paidByNameIdx] ? String(row[paidByNameIdx]).trim() : (currentUserName || 'Member');
+        let pEmail = paidByEmailIdx !== -1 && row[paidByEmailIdx] ? String(row[paidByEmailIdx]).trim().toLowerCase() : '';
+
+        if (!pEmail && currentUserEmail) {
+          pEmail = currentUserEmail.toLowerCase();
+        }
+
+        if (pEmail) {
+          fileEmails.add(pEmail);
+        }
+
+        const isEmailMatched = pEmail ? groupEmails.has(pEmail) : true;
+
+        let matchedMember: GroupMember | undefined;
+        if (group?.members && pEmail) {
+          matchedMember = Object.values(group.members).find(m => m.email.toLowerCase() === pEmail);
+        }
+
+        // Status & notes
+        const rawStatus = statusIdx !== -1 && row[statusIdx] ? String(row[statusIdx]).toLowerCase() : '';
+        const settled = rawStatus.includes('settled') || rawStatus.includes('paid');
+        const note = remarksIdx !== -1 && row[remarksIdx] ? String(row[remarksIdx]).trim() : undefined;
+        const voucherNo = voucherIdx !== -1 && row[voucherIdx] ? String(row[voucherIdx]).trim() : undefined;
+
+        parsedRows.push({
+          rowNumber: r + 1,
+          name: particulars,
+          amount: numAmount,
+          date: isoDate,
+          category: resolvedCategoryKey,
+          rawCategory: rawCatString,
+          isCategoryMatched: catMatch.isMatched,
+          paidByName: pName,
+          paidByEmail: pEmail,
+          matchedMember,
+          isEmailMatched,
+          settled,
+          note,
+          voucherNo
+        });
+      }
+
+      if (parsedRows.length === 0) {
+        resolve({
+          validRows: [],
+          totalRows: 0,
+          totalAmount: 0,
+          dateRange: { start: '', end: '' },
+          uniqueFileEmails: [],
+          matchedEmails: [],
+          unmatchedEmails: [],
+          groupMemberEmails: groupMemberEmailsArray,
+          categoryMatches: [],
+          unmatchedCategories: [],
+          canProceed: false,
+          error: 'No valid transaction rows found in the uploaded file.'
+        });
+        return;
+      }
+
+      const uniqueFileEmails = Array.from(fileEmails);
+      const matchedEmails = uniqueFileEmails.filter(e => groupEmails.has(e));
+      const unmatchedEmails = uniqueFileEmails.filter(e => !groupEmails.has(e));
+
+      // Compile category match summary
+      const categoryMatches: CategoryMatchInfo[] = Array.from(categoryStats.values()).map(stat => ({
+        fileCategory: stat.rawName,
+        matchedKey: stat.matchedKey,
+        matchedName: stat.matchedName,
+        isMatched: stat.isMatched,
+        count: stat.count,
+        totalAmount: stat.totalAmount
+      }));
+
+      const unmatchedCategories = categoryMatches
+        .filter(c => !c.isMatched)
+        .map(c => c.fileCategory);
+
+      const totalAmount = parsedRows.reduce((acc, r) => acc + r.amount, 0);
+
+      resolve({
+        validRows: parsedRows,
+        totalRows: parsedRows.length,
+        totalAmount,
+        dateRange: { start: minDate, end: maxDate },
+        uniqueFileEmails,
+        matchedEmails,
+        unmatchedEmails,
+        groupMemberEmails: groupMemberEmailsArray,
+        categoryMatches,
+        unmatchedCategories,
+        canProceed: unmatchedEmails.length === 0
+      });
+    } catch (err: any) {
+      resolve({
+        validRows: [],
+        totalRows: 0,
+        totalAmount: 0,
+        dateRange: { start: '', end: '' },
+        uniqueFileEmails: [],
+        matchedEmails: [],
+        unmatchedEmails: [],
+        groupMemberEmails: [],
+        categoryMatches: [],
+        unmatchedCategories: [],
+        canProceed: false,
+        error: `Error parsing file: ${err?.message || 'Invalid format'}`
+      });
+    }
+  });
 }

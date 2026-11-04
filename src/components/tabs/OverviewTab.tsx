@@ -304,7 +304,7 @@ export function OverviewTab({
             Activity for {selectedPeriod === 'current_month' ? 'This Month' : selectedPeriod === 'last_month' ? 'Last Month' : 'This Year'}
           </span>
           <div className="flex items-center gap-3">
-            {onOpenExportLedger && filteredTransactions.length > 0 && (
+            {onOpenExportLedger && userRole !== 'viewer' && filteredTransactions.length > 0 && (
               <button
                 type="button"
                 onClick={onOpenExportLedger}

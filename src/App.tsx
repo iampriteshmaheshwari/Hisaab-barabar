@@ -34,6 +34,7 @@ import { CategoryModal } from './components/modals/CategoryModal';
 import { MergeOfflineModal } from './components/modals/MergeOfflineModal';
 import { ExportLedgerModal } from './components/modals/ExportLedgerModal';
 import { ImportLedgerModal } from './components/modals/ImportLedgerModal';
+import { SoloAuthPromptModal, type SoloAuthFeature } from './components/modals/SoloAuthPromptModal';
 import type { ImportRowParsed } from './utils/exportLedgerUtils';
 import { OnboardingModal } from './components/modals/OnboardingModal';
 import { ProfileSetupModal } from './components/modals/ProfileSetupModal';
@@ -353,6 +354,8 @@ export default function App() {
   const [showMergeModal, setShowMergeModal] = useState(false);
   const [showExportLedgerModal, setShowExportLedgerModal] = useState(false);
   const [showImportLedgerModal, setShowImportLedgerModal] = useState(false);
+  const [showSoloAuthModal, setShowSoloAuthModal] = useState(false);
+  const [soloAuthFeature, setSoloAuthFeature] = useState<SoloAuthFeature>('create_ledger');
   const [hasCheckedMergeForUser, setHasCheckedMergeForUser] = useState<string | null>(null);
   const [showOnboardingModal, setShowOnboardingModal] = useState<boolean>(() => {
     try {
@@ -682,8 +685,34 @@ export default function App() {
   };
 
   const handleOpenGroupModal = (tab: 'members' | 'groups' | 'create' = 'members') => {
+    if (!user) {
+      if (tab === 'create') {
+        setSoloAuthFeature('create_ledger');
+        setShowSoloAuthModal(true);
+        return;
+      }
+      if (tab === 'members') {
+        setSoloAuthFeature('manage_members');
+        setShowSoloAuthModal(true);
+        return;
+      }
+      if (tab === 'groups') {
+        setSoloAuthFeature('multi_ledger');
+        setShowSoloAuthModal(true);
+        return;
+      }
+    }
     setGroupModalTab(tab);
     setShowGroupModal(true);
+  };
+
+  const handleOpenInviteModal = () => {
+    if (!user) {
+      setSoloAuthFeature('share_ledger');
+      setShowSoloAuthModal(true);
+      return;
+    }
+    setShowInviteModal(true);
   };
 
   // Period filter for Overview
@@ -1032,13 +1061,14 @@ export default function App() {
         console.error('Error reloading local storage:', e);
       }
 
-      // Guest mode: load or initialize local groups
+      // Guest mode: solo user is restricted to their single default personal ledger
       const saved = localStorage.getItem('expenses_local_groups');
       let localList: ExpenseGroup[] = saved ? JSON.parse(saved) : [];
       if (localList.length === 0) {
         localList = [{
           id: 'local_group',
-          name: 'My Personal Expenses',
+          name: 'Personal Expenses',
+          type: 'budget',
           createdBy: 'guest',
           ownerEmail: 'guest@device',
           memberUids: ['guest'],
@@ -1049,6 +1079,9 @@ export default function App() {
           },
           createdAt: new Date().toISOString()
         }];
+        localStorage.setItem('expenses_local_groups', JSON.stringify(localList));
+      } else if (localList.length > 1) {
+        localList = [localList[0]];
         localStorage.setItem('expenses_local_groups', JSON.stringify(localList));
       }
       setGroups(localList);
@@ -1257,27 +1290,10 @@ export default function App() {
       saveActiveGroupId(created.id, user.uid);
       return created;
     } else {
-      const newId = `local_grp_${Date.now()}`;
-      const newLocalGroup: ExpenseGroup = {
-        id: newId,
-        name: cleanName,
-        type: type || 'budget',
-        createdBy: 'guest',
-        ownerEmail: 'guest@device',
-        memberUids: ['guest'],
-        memberEmails: ['guest@device'],
-        inviteCode: `LOC${Math.random().toString(36).substring(2, 5).toUpperCase()}`,
-        members: {
-          guest: { email: 'guest@device', displayName: 'Guest', role: 'owner', addedAt: new Date().toISOString() }
-        },
-        createdAt: new Date().toISOString()
-      };
-      const updated = [...groups, newLocalGroup];
-      setGroups(updated);
-      localStorage.setItem('expenses_local_groups', JSON.stringify(updated));
-      setActiveGroupId(newId);
-      saveActiveGroupId(newId, null);
-      return newLocalGroup;
+      // Solo guest is restricted to single default personal ledger
+      setSoloAuthFeature('create_ledger');
+      setShowSoloAuthModal(true);
+      return null;
     }
   };
 
@@ -2271,13 +2287,43 @@ export default function App() {
   };
 
   // Handler: Batch Import Expenses into Fresh Ledger
-  const handleBatchImportExpenses = async (importedRows: ImportRowParsed[]) => {
+  const handleBatchImportExpenses = async (
+    importedRows: ImportRowParsed[],
+    newCategoriesToCreate?: Record<string, CategoryData>
+  ) => {
     if (!importedRows || importedRows.length === 0) return;
     const targetGroupId = activeGroup?.id || activeGroupId || (groups[0]?.id) || 'local_group';
     const isCloud = Boolean(user && !targetGroupId.startsWith('local_') && targetGroupId !== 'local_group');
     const isLocal = !isCloud;
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
     const groupName = (groups.find(g => g.id === targetGroupId) || activeGroup)?.name || 'Ledger';
+
+    // If any new categories were created during import, merge them into the ledger's customCategories
+    if (newCategoriesToCreate && Object.keys(newCategoriesToCreate).length > 0 && activeGroup) {
+      const mergedCustom = {
+        ...(activeGroup.customCategories || {}),
+        ...newCategoriesToCreate
+      };
+      const updatedGroups = groups.map(g => g.id === activeGroup.id ? { ...g, customCategories: mergedCustom } : g);
+      setGroups(updatedGroups);
+
+      if (isLocal) {
+        try {
+          const savedLocal = localStorage.getItem('expenses_local_groups');
+          if (savedLocal) {
+            const parsed: ExpenseGroup[] = JSON.parse(savedLocal);
+            const next = parsed.map(g => g.id === activeGroup.id ? { ...g, customCategories: mergedCustom } : g);
+            localStorage.setItem('expenses_local_groups', JSON.stringify(next));
+          }
+        } catch {}
+      } else if (isCloud && user) {
+        try {
+          await updateGroupCustomCategories(activeGroup.id, mergedCustom);
+        } catch (err) {
+          console.warn('Could not update custom categories in cloud on import:', err);
+        }
+      }
+    }
 
     const newTransactions: Transaction[] = [];
     const nowIso = new Date().toISOString();
@@ -3832,7 +3878,7 @@ export default function App() {
         userRole={userRole}
         onOpenGroupModal={handleOpenGroupModal}
         onOpenJoinModal={() => setShowJoinModal(true)}
-        onOpenInviteModal={() => setShowInviteModal(true)}
+        onOpenInviteModal={handleOpenInviteModal}
         onSelectGroup={handleSelectGroup}
         onShowToast={showToast}
         isOnline={isOnline}
@@ -3868,7 +3914,7 @@ export default function App() {
               userRole={userRole}
               onOpenSettleModal={handleOpenSettleModal}
               onRecordSettlement={handleDirectRecordSettlement}
-              onOpenInviteModal={() => setShowInviteModal(true)}
+              onOpenInviteModal={handleOpenInviteModal}
               onOpenAddExpense={() => {
                 setEditingTx(null);
                 setShowSplitExpenseModal(true);
@@ -3912,7 +3958,7 @@ export default function App() {
               pendingSyncCount={pendingSyncCount}
               geminiEnabled={false}
               onToggleGemini={handleToggleGemini}
-              onOpenInviteModal={() => setShowInviteModal(true)}
+              onOpenInviteModal={handleOpenInviteModal}
               onTriggerTestSplitNotification={handleTriggerTestSplitNotification}
             />
           ) : (
@@ -3933,7 +3979,7 @@ export default function App() {
               onDeleteExpense={handleDeleteExpense}
               onRestoreExpense={handleRestoreExpense}
               onPermanentDeleteExpense={handlePermanentDeleteExpense}
-              onOpenInviteModal={() => setShowInviteModal(true)}
+              onOpenInviteModal={handleOpenInviteModal}
               onShowToast={showToast}
               onUndoSettleExpense={handleUndoSettle}
               onUpdateExpense={handleUpdateSplitTx}
@@ -3959,7 +4005,7 @@ export default function App() {
                 groupName={activeGroup?.name || 'Group'}
                 onNavigateToTransactions={() => setActiveTab('Transactions')}
                 geminiEnabled={effectiveGeminiEnabled}
-                onOpenExportLedger={() => setShowExportLedgerModal(true)}
+                onOpenExportLedger={userRole !== 'viewer' ? () => setShowExportLedgerModal(true) : undefined}
               />
             )}
 
@@ -3974,7 +4020,7 @@ export default function App() {
                 onSettleExpense={(tx) => setSettleTx(tx)}
                 onUndoSettleExpense={handleUndoSettle}
                 groupName={activeGroup?.name || 'Group'}
-                onOpenExportLedger={() => setShowExportLedgerModal(true)}
+                onOpenExportLedger={userRole !== 'viewer' ? () => setShowExportLedgerModal(true) : undefined}
                 onOpenImportLedger={() => setShowImportLedgerModal(true)}
                 canImport={activeTransactions.length === 0}
               />
@@ -4050,7 +4096,7 @@ export default function App() {
                 pendingSyncCount={pendingSyncCount}
                 geminiEnabled={effectiveGeminiEnabled}
                 onToggleGemini={handleToggleGemini}
-                onOpenInviteModal={() => setShowInviteModal(true)}
+                onOpenInviteModal={handleOpenInviteModal}
                 onTriggerTestSplitNotification={handleTriggerTestSplitNotification}
               />
             )}
@@ -4070,7 +4116,13 @@ export default function App() {
         onCreateGroup={handleCreateNewGroup}
         onDeleteGroup={handleDeleteGroup}
         onOpenJoinModal={() => setShowJoinModal(true)}
-        onOpenInviteModal={() => setShowInviteModal(true)}
+        onOpenInviteModal={handleOpenInviteModal}
+      />
+
+      <SoloAuthPromptModal
+        isOpen={showSoloAuthModal}
+        onClose={() => setShowSoloAuthModal(false)}
+        feature={soloAuthFeature}
       />
 
       <JoinGroupModal
@@ -4146,7 +4198,7 @@ export default function App() {
           userRole={userRole}
           initialTx={editingTx}
           transactions={transactions}
-          onOpenInviteModal={() => setShowInviteModal(true)}
+          onOpenInviteModal={handleOpenInviteModal}
           onAddDirectMember={async (nameOrEmail) => {
             const updated = await addDirectMemberToGroup(activeGroup, nameOrEmail, 'editor');
             setGroups(prev => prev.map(g => g.id === updated.id ? updated : g));
@@ -4343,13 +4395,14 @@ export default function App() {
 
       {/* Export Accounting Ledger Modal (Excel, CSV, PDF) */}
       <ExportLedgerModal
-        isOpen={showExportLedgerModal}
+        isOpen={showExportLedgerModal && userRole !== 'viewer'}
         onClose={() => setShowExportLedgerModal(false)}
         transactions={activeTransactions}
         categories={categories}
         group={activeGroup}
         currentUserName={user?.displayName || 'You'}
         currentUserEmail={user?.email || undefined}
+        userRole={userRole}
       />
 
       {/* Re-import Accounting Ledger Modal (CSV / Excel with Member Email Verification) */}

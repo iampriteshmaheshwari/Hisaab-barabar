@@ -9,7 +9,7 @@ import {
   SlidersHorizontal,
   Info
 } from 'lucide-react';
-import type { Transaction, CategoryData, ExpenseGroup } from '../../types';
+import type { Transaction, CategoryData, ExpenseGroup, UserRole } from '../../types';
 import { 
   ExportLedgerOptions, 
   filterTransactionsForExport, 
@@ -28,6 +28,7 @@ interface ExportLedgerModalProps {
   group: ExpenseGroup | null;
   currentUserName?: string;
   currentUserEmail?: string;
+  userRole?: UserRole;
 }
 
 export function ExportLedgerModal({
@@ -37,7 +38,8 @@ export function ExportLedgerModal({
   categories,
   group,
   currentUserName,
-  currentUserEmail
+  currentUserEmail,
+  userRole
 }: ExportLedgerModalProps) {
   const [datePreset, setDatePreset] = useState<ExportLedgerOptions['datePreset']>('all');
   const [customStart, setCustomStart] = useState<string>('');
@@ -114,6 +116,8 @@ export function ExportLedgerModal({
     { id: 'last_fy', label: prevFyLabel },
     { id: 'custom', label: 'Custom' }
   ];
+
+  if (!isOpen || userRole === 'viewer') return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 font-sans select-none overflow-y-auto">

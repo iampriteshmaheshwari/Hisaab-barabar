@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { 
   X, 
   Upload, 
@@ -6,14 +6,13 @@ import {
   AlertCircle, 
   CheckCircle2, 
   Loader2, 
-  Users, 
-  Calendar, 
-  ArrowRight,
-  ShieldAlert,
   UserCheck,
-  FileText
+  ShieldAlert,
+  Tag,
+  FolderPlus,
+  ArrowRight
 } from 'lucide-react';
-import type { ExpenseGroup, CategoryData, Transaction } from '../../types';
+import type { ExpenseGroup, CategoryData } from '../../types';
 import { 
   parseAndValidateLedgerImport, 
   ImportValidationResult, 
@@ -29,7 +28,10 @@ interface ImportLedgerModalProps {
   categories: Record<string, CategoryData>;
   currentUserName?: string;
   currentUserEmail?: string;
-  onBatchImport: (importedRows: ImportRowParsed[]) => Promise<void>;
+  onBatchImport: (
+    importedRows: ImportRowParsed[], 
+    newCategoriesToCreate?: Record<string, CategoryData>
+  ) => Promise<void>;
 }
 
 export function ImportLedgerModal({
@@ -45,73 +47,12 @@ export function ImportLedgerModal({
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [validationResult, setValidationResult] = useState<ImportValidationResult | null>(null);
   const [emailMappings, setEmailMappings] = useState<Record<string, string>>({});
+  const [categoryActions, setCategoryActions] = useState<Record<string, { mode: 'create' | 'map'; targetKey?: string }>>({});
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<boolean>(false);
 
-  // Reset modal state when closed
-  React.useEffect(() => {
-    if (!isOpen) {
-      setFile(null);
-      setIsParsing(false);
-      setValidationResult(null);
-      setEmailMappings({});
-      setIsImporting(false);
-      setImportError(null);
-      setDragOver(false);
-    }
-  }, [isOpen]);
-
-  const handleProcessFile = async (selectedFile: File) => {
-    setFile(selectedFile);
-    setIsParsing(true);
-    setValidationResult(null);
-    setEmailMappings({});
-    setImportError(null);
-
-    try {
-      const result = await parseAndValidateLedgerImport(
-        selectedFile,
-        group,
-        currentUserEmail,
-        currentUserName
-      );
-      setValidationResult(result);
-    } catch (err: any) {
-      setValidationResult({
-        validRows: [],
-        totalRows: 0,
-        totalAmount: 0,
-        dateRange: { start: '', end: '' },
-        uniqueFileEmails: [],
-        matchedEmails: [],
-        unmatchedEmails: [],
-        groupMemberEmails: [],
-        canProceed: false,
-        error: err?.message || 'Failed to process file'
-      });
-    } finally {
-      setIsParsing(false);
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) {
-      handleProcessFile(f);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) {
-      handleProcessFile(f);
-    }
-  };
-
-  // Group members list for mapping dropdowns
+  // Group members list for mapping dropdowns (defined before conditional return)
   const availableGroupMembers = React.useMemo(() => {
     const members: { email: string; name: string }[] = [];
     if (currentUserEmail) {
@@ -137,16 +78,126 @@ export function ImportLedgerModal({
   }, [group, currentUserEmail, currentUserName]);
 
   // Check if all unmatched emails have been reassigned via mappings
-  const allUnmatchedResolved = React.useMemo(() => {
+  const allUnmatchedEmailsResolved = React.useMemo(() => {
     if (!validationResult) return false;
     if (validationResult.unmatchedEmails.length === 0) return true;
     return validationResult.unmatchedEmails.every(email => Boolean(emailMappings[email]));
   }, [validationResult, emailMappings]);
 
+  // Check if all unmatched categories have an action (create or mapped to target)
+  const allUnmatchedCategoriesResolved = React.useMemo(() => {
+    if (!validationResult) return false;
+    if (!validationResult.unmatchedCategories || validationResult.unmatchedCategories.length === 0) return true;
+    return validationResult.unmatchedCategories.every(rawCat => {
+      const action = categoryActions[rawCat];
+      if (!action) return false;
+      if (action.mode === 'create') return true;
+      if (action.mode === 'map') return Boolean(action.targetKey);
+      return false;
+    });
+  }, [validationResult, categoryActions]);
+
+  // Reset modal state when closed
+  React.useEffect(() => {
+    if (!isOpen) {
+      setFile(null);
+      setIsParsing(false);
+      setValidationResult(null);
+      setEmailMappings({});
+      setCategoryActions({});
+      setIsImporting(false);
+      setImportError(null);
+      setDragOver(false);
+    }
+  }, [isOpen]);
+
+  const handleProcessFile = async (selectedFile: File) => {
+    setFile(selectedFile);
+    setIsParsing(true);
+    setValidationResult(null);
+    setEmailMappings({});
+    setCategoryActions({});
+    setImportError(null);
+
+    try {
+      const result = await parseAndValidateLedgerImport(
+        selectedFile,
+        group,
+        categories,
+        currentUserEmail,
+        currentUserName
+      );
+
+      // Pre-seed category actions: default to 'create' for new/unmatched categories
+      if (result.unmatchedCategories && result.unmatchedCategories.length > 0) {
+        const initialActions: Record<string, { mode: 'create' | 'map'; targetKey?: string }> = {};
+        result.unmatchedCategories.forEach(cat => {
+          initialActions[cat] = { mode: 'create' };
+        });
+        setCategoryActions(initialActions);
+      }
+
+      setValidationResult(result);
+    } catch (err: any) {
+      setValidationResult({
+        validRows: [],
+        totalRows: 0,
+        totalAmount: 0,
+        dateRange: { start: '', end: '' },
+        uniqueFileEmails: [],
+        matchedEmails: [],
+        unmatchedEmails: [],
+        groupMemberEmails: [],
+        categoryMatches: [],
+        unmatchedCategories: [],
+        canProceed: false,
+        error: err?.message || 'Failed to process file'
+      });
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) {
+      handleProcessFile(f);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) {
+      handleProcessFile(f);
+    }
+  };
+
   const handleEmailMapChange = (unmatchedEmail: string, targetEmail: string) => {
     setEmailMappings(prev => ({
       ...prev,
       [unmatchedEmail]: targetEmail
+    }));
+  };
+
+  const handleCategoryModeToggle = (rawCat: string, mode: 'create' | 'map') => {
+    setCategoryActions(prev => ({
+      ...prev,
+      [rawCat]: {
+        mode,
+        targetKey: mode === 'map' ? (prev[rawCat]?.targetKey || Object.keys(categories)[0] || 'other') : undefined
+      }
+    }));
+  };
+
+  const handleCategoryTargetChange = (rawCat: string, targetKey: string) => {
+    setCategoryActions(prev => ({
+      ...prev,
+      [rawCat]: {
+        mode: 'map',
+        targetKey
+      }
     }));
   };
 
@@ -156,22 +207,64 @@ export function ImportLedgerModal({
     setImportError(null);
 
     try {
-      // Apply email remappings if any
+      // 1. Build new categories to create in ledger
+      const newCategoriesToCreate: Record<string, CategoryData> = {};
+      const categoryResolutionMap: Record<string, string> = {};
+
+      const existingKeys = new Set(Object.keys(categories).map(k => k.toLowerCase()));
+
+      (validationResult.unmatchedCategories || []).forEach(rawCat => {
+        const action = categoryActions[rawCat] || { mode: 'create' };
+        if (action.mode === 'create') {
+          // Normalize key name
+          let baseKey = rawCat.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 20);
+          if (!baseKey) baseKey = 'cat';
+          let finalKey = baseKey;
+          let counter = 1;
+          while (existingKeys.has(finalKey) || newCategoriesToCreate[finalKey]) {
+            finalKey = `${baseKey}_${counter++}`;
+          }
+
+          // Title case display name
+          const formattedTitle = rawCat
+            .split(/[\s_-]+/)
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+            .join(' ')
+            .trim() || 'Custom Category';
+
+          newCategoriesToCreate[finalKey] = {
+            name: formattedTitle,
+            iconName: 'Tag',
+            hex: '#1a73e8'
+          };
+          categoryResolutionMap[rawCat] = finalKey;
+        } else if (action.mode === 'map' && action.targetKey) {
+          categoryResolutionMap[rawCat] = action.targetKey;
+        }
+      });
+
+      // 2. Finalize all rows with resolved payer and category
       const finalizedRows: ImportRowParsed[] = validationResult.validRows.map(row => {
         const mappedEmail = emailMappings[row.paidByEmail] || row.paidByEmail;
         const matchedMem = group?.members 
           ? Object.values(group.members).find(m => m.email.toLowerCase() === mappedEmail.toLowerCase())
           : undefined;
 
+        let resolvedCategory = row.category;
+        if (row.rawCategory && categoryResolutionMap[row.rawCategory]) {
+          resolvedCategory = categoryResolutionMap[row.rawCategory];
+        }
+
         return {
           ...row,
+          category: resolvedCategory,
           paidByEmail: mappedEmail,
           matchedMember: matchedMem || row.matchedMember,
           isEmailMatched: true
         };
       });
 
-      await onBatchImport(finalizedRows);
+      await onBatchImport(finalizedRows, Object.keys(newCategoriesToCreate).length > 0 ? newCategoriesToCreate : undefined);
       onClose();
     } catch (err: any) {
       console.error('Batch import failed:', err);
@@ -181,7 +274,15 @@ export function ImportLedgerModal({
     }
   };
 
+  // Safe to return null after all hooks are evaluated
   if (!isOpen) return null;
+
+  const canProceedWithImport = 
+    Boolean(validationResult) && 
+    validationResult!.validRows.length > 0 && 
+    allUnmatchedEmailsResolved && 
+    allUnmatchedCategoriesResolved && 
+    !isImporting;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 font-sans select-none overflow-y-auto">
@@ -260,7 +361,7 @@ export function ImportLedgerModal({
           {isParsing && (
             <div className="py-6 flex flex-col items-center justify-center gap-2 text-text-secondary">
               <Loader2 size={24} className="animate-spin text-google-blue" />
-              <span className="text-xs">Parsing expenses and verifying member emails...</span>
+              <span className="text-xs">Parsing expenses and validating ledger records...</span>
             </div>
           )}
 
@@ -328,7 +429,7 @@ export function ImportLedgerModal({
                             Unmatched Member Emails Found
                           </h4>
                           <p className="text-[11px] text-text-secondary leading-relaxed">
-                            To ensure accounting integrity, all payers must belong to this ledger group. You can reassign them below or invite them to the group:
+                            To ensure accounting integrity, all payers must belong to this ledger group. You can reassign them below:
                           </p>
                         </div>
                       </div>
@@ -365,12 +466,90 @@ export function ImportLedgerModal({
                         ))}
                       </div>
 
-                      {allUnmatchedResolved && (
+                      {allUnmatchedEmailsResolved && (
                         <div className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold pt-1">
                           <CheckCircle2 size={14} />
-                          <span>All unmatched emails successfully reassigned. Ready to import!</span>
+                          <span>All unmatched emails successfully reassigned.</span>
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* Category Matching & Mapping Section */}
+                  {validationResult.unmatchedCategories && validationResult.unmatchedCategories.length > 0 && (
+                    <div className="p-3.5 rounded-2xl bg-google-blue/10 border border-google-blue/20 text-text-primary space-y-3">
+                      <div className="flex items-start gap-2">
+                        <Tag size={17} className="text-google-blue shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <h4 className="font-semibold text-xs text-text-primary">
+                            New / Unmatched Categories ({validationResult.unmatchedCategories.length})
+                          </h4>
+                          <p className="text-[11px] text-text-secondary leading-relaxed">
+                            Create these as new categories in this ledger, or map them to existing categories:
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 pt-1 border-t border-google-blue/20">
+                        {validationResult.unmatchedCategories.map(rawCat => {
+                          const action = categoryActions[rawCat] || { mode: 'create' };
+                          return (
+                            <div key={rawCat} className="bg-surface p-2.5 rounded-xl border border-border space-y-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-medium text-xs text-text-primary truncate">
+                                  "{rawCat}"
+                                </span>
+                                <div className="inline-flex rounded-lg bg-surface-hover p-0.5 text-[10px] font-semibold shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCategoryModeToggle(rawCat, 'create')}
+                                    className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+                                      action.mode === 'create'
+                                        ? 'bg-google-blue text-white shadow-2xs'
+                                        : 'text-text-secondary hover:text-text-primary'
+                                    }`}
+                                  >
+                                    Create New
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCategoryModeToggle(rawCat, 'map')}
+                                    className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer ${
+                                      action.mode === 'map'
+                                        ? 'bg-google-blue text-white shadow-2xs'
+                                        : 'text-text-secondary hover:text-text-primary'
+                                    }`}
+                                  >
+                                    Map to Existing
+                                  </button>
+                                </div>
+                              </div>
+
+                              {action.mode === 'create' ? (
+                                <div className="text-[10px] text-text-secondary flex items-center gap-1.5">
+                                  <FolderPlus size={12} className="text-google-blue shrink-0" />
+                                  <span>Will be added to ledger as a new category</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1.5 pt-0.5">
+                                  <span className="text-[10px] text-text-secondary shrink-0 font-medium">Map to:</span>
+                                  <select
+                                    value={action.targetKey || ''}
+                                    onChange={(e) => handleCategoryTargetChange(rawCat, e.target.value)}
+                                    className="flex-1 h-7 px-2 rounded-lg bg-surface-hover border border-border text-xs text-text-primary font-medium focus:outline-hidden focus:border-google-blue cursor-pointer"
+                                  >
+                                    {Object.entries(categories).map(([k, cat]) => (
+                                      <option key={k} value={k}>
+                                        {cat.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
 
@@ -416,7 +595,7 @@ export function ImportLedgerModal({
 
           <button
             type="button"
-            disabled={!validationResult || validationResult.validRows.length === 0 || !allUnmatchedResolved || isImporting}
+            disabled={!canProceedWithImport}
             onClick={handleConfirmImport}
             className="h-10 px-5 rounded-full bg-google-blue hover:bg-blue-700 active:scale-98 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
           >

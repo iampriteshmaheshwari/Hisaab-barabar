@@ -18,7 +18,8 @@ import {
   AlertTriangle,
   RotateCw,
   LogIn,
-  Wallet
+  Wallet,
+  BookOpen
 } from 'lucide-react';
 import type { ExpenseGroup, UserRole, GroupMember } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -327,42 +328,20 @@ export function GroupModal({
               {/* AUTHENTICATION GATE: User must sign in first to share / invite */}
               {!user ? (
                 <div className="py-6 px-4 sm:px-6 rounded-3xl bg-surface-hover/40 border border-border text-center space-y-4 font-sans">
-                  <div className="w-12 h-12 rounded-2xl bg-google-blue/10 text-google-blue flex items-center justify-center mx-auto">
+                  <div className="w-12 h-12 rounded-2xl bg-google-blue/10 text-google-blue flex items-center justify-center mx-auto shadow-xs">
                     <UserPlus size={22} strokeWidth={2.2} />
                   </div>
 
-                  <div className="space-y-1.5 max-w-sm mx-auto">
-                    <h3 className="text-base font-semibold text-text-primary">
+                  <div className="space-y-1.5 max-w-xs mx-auto">
+                    <h3 className="text-base sm:text-lg font-semibold text-text-primary tracking-tight">
                       Sign in with Google to Share
                     </h3>
-                    <p className="text-xs text-text-secondary leading-relaxed">
-                      Sharing and inviting members with View or Edit permissions requires signing in with your Google account.
+                    <p className="text-xs sm:text-sm text-text-secondary leading-relaxed">
+                      Connect your Google account to invite members, manage roles, and track shared balances.
                     </p>
                   </div>
 
-                  {/* Feature Summary */}
-                  <div className="bg-surface rounded-2xl p-3.5 border border-border text-left space-y-2.5 max-w-sm mx-auto text-xs">
-                    <div className="flex items-start gap-2.5 text-text-primary">
-                      <Shield size={15} className="text-google-blue shrink-0 mt-0.5" />
-                      <div className="text-text-secondary leading-snug">
-                        <span className="font-semibold text-text-primary">Custom Access Roles:</span> Grant full Edit rights or read-only View access per Gmail ID.
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-2.5 text-text-primary">
-                      <Share2 size={15} className="text-google-blue shrink-0 mt-0.5" />
-                      <div className="text-text-secondary leading-snug">
-                        <span className="font-semibold text-text-primary">Direct Invite Links:</span> Share 8-character codes or instant links for effortless joining.
-                      </div>
-                    </div>
-                    <div className="flex items-start gap-2.5 text-text-primary">
-                      <CheckCircle2 size={15} className="text-amber-500 shrink-0 mt-0.5" />
-                      <div className="text-text-secondary leading-snug">
-                        <span className="font-semibold text-text-primary">Real-Time Sync:</span> Balances, expenses, and shopping lists stay up-to-date across all devices.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-1 max-w-sm mx-auto">
+                  <div className="pt-2 max-w-xs mx-auto">
                     <button
                       type="button"
                       onClick={async () => {
@@ -377,9 +356,6 @@ export function GroupModal({
                       <GoogleIcon className="w-4 h-4 shrink-0" />
                       <span>Continue with Google</span>
                     </button>
-                    <p className="text-xs text-text-secondary mt-2">
-                      Secure, authenticated access powered by Google Identity
-                    </p>
                   </div>
                 </div>
               ) : (
@@ -646,123 +622,157 @@ export function GroupModal({
 
           {/* TAB 2: SWITCH LEDGERS */}
           {activeTab === 'groups' && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                  Your Ledgers
-                </span>
-                <div className="flex items-center gap-3">
-                  {onOpenJoinModal && (
+            <div className="space-y-4">
+              {!user ? (
+                <div className="py-6 px-4 sm:px-6 rounded-3xl bg-surface-hover/40 border border-border text-center space-y-4 font-sans">
+                  <div className="w-12 h-12 rounded-2xl bg-google-blue/10 text-google-blue flex items-center justify-center mx-auto shadow-xs">
+                    <BookOpen size={22} strokeWidth={2.2} />
+                  </div>
+
+                  <div className="space-y-1.5 max-w-xs mx-auto">
+                    <h3 className="text-base sm:text-lg font-semibold text-text-primary tracking-tight">
+                      Sign in with Google to Switch Ledgers
+                    </h3>
+                    <p className="text-xs sm:text-sm text-text-secondary leading-relaxed">
+                      Connect your Google account to access and switch between all your personal and split ledgers.
+                    </p>
+                  </div>
+
+                  <div className="pt-2 max-w-xs mx-auto">
                     <button
                       type="button"
-                      onClick={() => {
-                        onClose();
-                        onOpenJoinModal();
+                      onClick={async () => {
+                        try {
+                          await signInWithGoogle();
+                        } catch {}
                       }}
-                      className="text-xs sm:text-sm text-text-secondary hover:text-google-blue font-medium flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Join a ledger using an invite code"
+                      className="w-full h-11 rounded-full bg-surface hover:bg-surface-hover border border-border shadow-xs hover:border-text-secondary/40 text-xs sm:text-sm font-medium text-text-primary flex items-center justify-center gap-2.5 transition-all cursor-pointer active:scale-95 select-none"
                     >
-                      <LogIn size={13} />
-                      <span>Join with Code</span>
+                      <GoogleIcon className="w-4 h-4 shrink-0" />
+                      <span>Continue with Google</span>
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('create')}
-                    className="text-xs sm:text-sm text-google-blue font-semibold hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus size={13} />
-                    <span>New Ledger</span>
-                  </button>
+                  </div>
                 </div>
-              </div>
-
-              <div className="bg-surface rounded-2xl border border-border divide-y divide-border overflow-hidden">
-                {groups.map((grp) => {
-                  const isSelected = activeGroup?.id === grp.id;
-                  const isGrpOwner = !user || grp.createdBy === user.uid || grp.createdBy === 'guest';
-                  return (
-                    <div
-                      key={grp.id}
-                      onClick={() => {
-                        onSelectGroup(grp.id);
-                        setActiveTab('members');
-                      }}
-                      className={`p-3.5 flex items-center justify-between cursor-pointer transition-colors ${
-                        isSelected ? 'bg-google-blue/10' : 'hover:bg-surface-hover/50'
-                      }`}
-                    >
-                      <div className="min-w-0 pr-2">
-                        <div className="text-sm sm:text-base font-semibold text-text-primary truncate flex items-center gap-2">
-                          <span className="truncate">{grp.name}</span>
-                          {grp.type === 'split' && (
-                            <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-google-blue/10 text-google-blue border border-google-blue/20 shrink-0">
-                              Split
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs text-text-secondary mt-0.5 flex items-center gap-1.5 truncate">
-                          <span>{grp.memberEmails?.length || 1} {grp.memberEmails?.length === 1 ? 'member' : 'members'}</span>
-                          <span>·</span>
-                          <span>Code: <span className="font-mono">{grp.inviteCode || 'N/A'}</span></span>
-                          {isGrpOwner && (
-                            <>
-                              <span>·</span>
-                              <span>Admin</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {isSelected && (
-                          <div className="w-6 h-6 rounded-full bg-google-blue text-white flex items-center justify-center shrink-0" title="Active ledger">
-                            <Check size={14} />
-                          </div>
-                        )}
-
-                        {onDeleteGroup && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setGroupToDelete(grp);
-                            }}
-                            className="w-8 h-8 rounded-full flex items-center justify-center text-text-secondary hover:text-google-red hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
-                            title={isGrpOwner ? "Delete ledger" : "Leave ledger"}
-                            aria-label={isGrpOwner ? `Delete ${grp.name}` : `Leave ${grp.name}`}
-                          >
-                            {isGrpOwner ? <Trash2 size={15} /> : <LogOut size={15} />}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Join with Invite Code Card */}
-              {onOpenJoinModal && (
-                <div className="p-3.5 rounded-2xl bg-surface-hover/50 border border-border flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-xs sm:text-sm font-semibold text-text-primary flex items-center gap-1.5">
-                      <LogIn size={14} className="text-google-blue shrink-0" />
-                      <span>Have an invite code?</span>
-                    </div>
-                    <div className="text-xs text-text-secondary mt-0.5 truncate">
-                      Paste a friend's ledger code to join their group instantly
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                      Your Ledgers
+                    </span>
+                    <div className="flex items-center gap-3">
+                      {onOpenJoinModal && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose();
+                            onOpenJoinModal();
+                          }}
+                          className="text-xs sm:text-sm text-text-secondary hover:text-google-blue font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                          title="Join a ledger using an invite code"
+                        >
+                          <LogIn size={13} />
+                          <span>Join with Code</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('create')}
+                        className="text-xs sm:text-sm text-google-blue font-semibold hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Plus size={13} />
+                        <span>New Ledger</span>
+                      </button>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      onOpenJoinModal();
-                    }}
-                    className="h-8 px-3.5 rounded-xl bg-google-blue hover:bg-blue-700 text-white text-xs font-semibold shrink-0 cursor-pointer shadow-xs transition-colors select-none"
-                  >
-                    Join with Code
-                  </button>
+
+                  <div className="bg-surface rounded-2xl border border-border divide-y divide-border overflow-hidden">
+                    {groups.map((grp) => {
+                      const isSelected = activeGroup?.id === grp.id;
+                      const isGrpOwner = !user || grp.createdBy === user.uid || grp.createdBy === 'guest';
+                      return (
+                        <div
+                          key={grp.id}
+                          onClick={() => {
+                            onSelectGroup(grp.id);
+                            setActiveTab('members');
+                          }}
+                          className={`p-3.5 flex items-center justify-between cursor-pointer transition-colors ${
+                            isSelected ? 'bg-google-blue/10' : 'hover:bg-surface-hover/50'
+                          }`}
+                        >
+                          <div className="min-w-0 pr-2">
+                            <div className="text-sm sm:text-base font-semibold text-text-primary truncate flex items-center gap-2">
+                              <span className="truncate">{grp.name}</span>
+                              {grp.type === 'split' && (
+                                <span className="px-1.5 py-0.2 rounded text-[10px] font-semibold bg-google-blue/10 text-google-blue border border-google-blue/20 shrink-0">
+                                  Split
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-text-secondary mt-0.5 flex items-center gap-1.5 truncate">
+                              <span>{grp.memberEmails?.length || 1} {grp.memberEmails?.length === 1 ? 'member' : 'members'}</span>
+                              <span>·</span>
+                              <span>Code: <span className="font-mono">{grp.inviteCode || 'N/A'}</span></span>
+                              {isGrpOwner && (
+                                <>
+                                  <span>·</span>
+                                  <span>Admin</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {isSelected && (
+                              <div className="w-6 h-6 rounded-full bg-google-blue text-white flex items-center justify-center shrink-0" title="Active ledger">
+                                <Check size={14} />
+                              </div>
+                            )}
+
+                            {onDeleteGroup && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setGroupToDelete(grp);
+                                }}
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-text-secondary hover:text-google-red hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
+                                title={isGrpOwner ? "Delete ledger" : "Leave ledger"}
+                                aria-label={isGrpOwner ? `Delete ${grp.name}` : `Leave ${grp.name}`}
+                              >
+                                {isGrpOwner ? <Trash2 size={15} /> : <LogOut size={15} />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Join with Invite Code Card */}
+                  {onOpenJoinModal && (
+                    <div className="p-3.5 rounded-2xl bg-surface-hover/50 border border-border flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs sm:text-sm font-semibold text-text-primary flex items-center gap-1.5">
+                          <LogIn size={14} className="text-google-blue shrink-0" />
+                          <span>Have an invite code?</span>
+                        </div>
+                        <div className="text-xs text-text-secondary mt-0.5 truncate">
+                          Paste a friend's ledger code to join their group instantly
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenJoinModal();
+                        }}
+                        className="h-8 px-3.5 rounded-xl bg-google-blue hover:bg-blue-700 text-white text-xs font-semibold shrink-0 cursor-pointer shadow-xs transition-colors select-none"
+                      >
+                        Join with Code
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -771,33 +781,38 @@ export function GroupModal({
           {/* TAB 3: CREATE NEW LEDGER / GROUP */}
           {activeTab === 'create' && (
             <div className="space-y-4">
-              {!user && (
-                <div className="p-3.5 rounded-2xl bg-surface-hover/60 border border-border flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
-                      <FolderPlus size={14} className="text-google-blue shrink-0" />
-                      <span>Local Device Mode</span>
-                    </div>
-                    <p className="text-[11px] text-text-secondary mt-0.5 leading-snug">
-                      Ledgers created now are stored on this device. Sign in anytime to sync across devices and invite friends.
+              {!user ? (
+                <div className="py-6 px-4 sm:px-6 rounded-3xl bg-surface-hover/40 border border-border text-center space-y-4 font-sans">
+                  <div className="w-12 h-12 rounded-2xl bg-google-blue/10 text-google-blue flex items-center justify-center mx-auto shadow-xs">
+                    <FolderPlus size={22} strokeWidth={2.2} />
+                  </div>
+
+                  <div className="space-y-1.5 max-w-xs mx-auto">
+                    <h3 className="text-base sm:text-lg font-semibold text-text-primary tracking-tight">
+                      Sign in with Google to Create Ledgers
+                    </h3>
+                    <p className="text-xs sm:text-sm text-text-secondary leading-relaxed">
+                      Connect your Google account to create unlimited personal and split ledgers synced across all your devices.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await signInWithGoogle();
-                      } catch {}
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-surface hover:bg-surface-hover border border-border text-xs font-semibold text-text-primary flex items-center gap-1.5 shrink-0 shadow-2xs transition-colors cursor-pointer"
-                  >
-                    <GoogleIcon className="w-3.5 h-3.5 shrink-0" />
-                    <span>Sign in</span>
-                  </button>
-                </div>
-              )}
 
-                  <form onSubmit={handleCreateGroupSubmit} className="space-y-4">
+                  <div className="pt-2 max-w-xs mx-auto">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await signInWithGoogle();
+                        } catch {}
+                      }}
+                      className="w-full h-11 rounded-full bg-surface hover:bg-surface-hover border border-border shadow-xs hover:border-text-secondary/40 text-xs sm:text-sm font-medium text-text-primary flex items-center justify-center gap-2.5 transition-all cursor-pointer active:scale-95 select-none"
+                    >
+                      <GoogleIcon className="w-4 h-4 shrink-0" />
+                      <span>Continue with Google</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <form onSubmit={handleCreateGroupSubmit} className="space-y-4">
                     {/* Clean Segmented Control: Budget vs Split */}
                     <div>
                       <label className="text-xs font-semibold text-text-secondary uppercase tracking-wider block mb-1.5">
@@ -871,6 +886,7 @@ export function GroupModal({
                       </button>
                     </div>
                   </form>
+              )}
             </div>
           )}
         </div>

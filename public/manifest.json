@@ -1,7 +1,7 @@
 {
   "id": "/",
   "name": "Hisaab Barabar",
-  "short_name": "Hisaab Barabar",
+  "short_name": "Hisaab",
   "description": "Collaborative expense manager with group sharing, role-based access, multi-device sync, and transaction tracking.",
   "start_url": "/",
   "scope": "/",

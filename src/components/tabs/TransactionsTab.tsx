@@ -585,7 +585,7 @@ export function TransactionsTab({
             </span>
           </div>
 
-          {onOpenExportLedger && filteredTransactions.length > 0 && (
+          {onOpenExportLedger && userRole !== 'viewer' && filteredTransactions.length > 0 && (
             <button
               type="button"
               onClick={onOpenExportLedger}
