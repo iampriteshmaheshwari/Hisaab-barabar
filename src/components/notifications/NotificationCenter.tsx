@@ -414,9 +414,9 @@ export function NotificationCenter({
                   )}
 
                   <div className="mt-1 text-xs text-text-secondary/70">
-                    {new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(item.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                     {' • '}
-                    {new Date(item.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                    {new Date(item.createdAt).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
                   </div>
                 </div>
 

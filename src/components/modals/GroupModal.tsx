@@ -535,7 +535,7 @@ export function GroupModal({
                                 {member.addedAt && (
                                   <>
                                     <span>•</span>
-                                    <span>{new Date(member.addedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                                    <span>{new Date(member.addedAt).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                                   </>
                                 )}
                               </div>

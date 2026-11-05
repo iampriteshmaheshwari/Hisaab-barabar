@@ -18,12 +18,13 @@ import {
   Download,
   Upload
 } from 'lucide-react';
-import type { Transaction, CategoryData, UserRole } from '../../types';
+import type { Transaction, CategoryData, UserRole, DayGroup } from '../../types';
 import { ICON_MAP } from '../modals/CategoryModal';
 import { createPortal } from 'react-dom';
 import { TransactionActionSheet } from '../modals/TransactionActionSheet';
 import { useAuth } from '../../context/AuthContext';
 import { formatSettlementDisplayTitle } from '../../services/splitService';
+import { formatINR } from '../../utils/formatUtils';
 
 interface TransactionsTabProps {
   transactions: Transaction[];
@@ -337,13 +338,6 @@ export function TransactionsTab({
   }, [filteredTransactions, sortBy]);
 
   // Group by Month and Day for subtle visual differentiation
-  interface DayGroup {
-    dateKey: string;
-    displayDate: string;
-    dayTotal: number;
-    transactions: Transaction[];
-  }
-
   interface MonthGroup {
     monthKey: string;
     monthTotal: number;
@@ -581,7 +575,7 @@ export function TransactionsTab({
           <div className="flex items-center gap-1.5">
             <span className="text-text-secondary text-[11px] uppercase tracking-wider font-semibold">Total</span>
             <span className="font-bold font-mono text-base text-text-primary tracking-tight">
-              ₹{totalFiltered.toLocaleString('en-IN')}
+              {formatINR(totalFiltered, { symbol: true })}
             </span>
           </div>
 
@@ -666,7 +660,7 @@ export function TransactionsTab({
                       {monthGroup.monthKey}
                     </span>
                     <span className="text-text-secondary font-mono text-[11px]">
-                      ₹{monthGroup.monthTotal.toLocaleString('en-IN')}
+                      {formatINR(monthGroup.monthTotal, { symbol: true })}
                     </span>
                   </div>
                 )}
@@ -690,7 +684,7 @@ export function TransactionsTab({
                           </span>
                         </div>
                         <span className="font-mono font-medium text-text-primary text-xs">
-                          ₹{dayGroup.dayTotal.toLocaleString('en-IN')}
+                          {formatINR(dayGroup.dayTotal, { symbol: true })}
                         </span>
                       </div>
 
@@ -753,11 +747,11 @@ export function TransactionsTab({
                               >
                                 <div className="text-right min-w-[60px] sm:min-w-[76px]">
                                   <div className="text-sm sm:text-base font-semibold text-text-primary tabular-nums">
-                                    ₹{tx.amount.toLocaleString('en-IN')}
+                                    {formatINR(tx.amount, { symbol: true })}
                                   </div>
                                   {tx.settled && tx.originalAmount && (
                                     <div className="text-[11px] text-text-secondary line-through tabular-nums">
-                                      ₹{tx.originalAmount.toLocaleString('en-IN')}
+                                      {formatINR(tx.originalAmount, { symbol: true })}
                                     </div>
                                   )}
                                 </div>
@@ -1265,7 +1259,7 @@ export function TransactionsTab({
                   Delete Expense?
                 </h4>
                 <p className="text-xs sm:text-sm text-text-secondary leading-relaxed">
-                  Are you sure you want to delete <span className="font-semibold text-text-primary">"{desktopDeleteTx.name}"</span> (₹{desktopDeleteTx.amount.toLocaleString('en-IN')})? This cannot be undone.
+                  Are you sure you want to delete <span className="font-semibold text-text-primary">"{desktopDeleteTx.name}"</span> ({formatINR(desktopDeleteTx.amount, { symbol: true })})? This cannot be undone.
                 </p>
               </div>
 

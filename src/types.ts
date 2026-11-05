@@ -170,3 +170,30 @@ export interface AppNotification {
   settledToName?: string;
   splitMembersCount?: number;
 }
+
+export interface DayGroup {
+  dateKey: string;
+  displayDate: string;
+  transactions: Transaction[];
+  dayTotal?: number;
+  total?: number;
+  date?: string;
+  sortKey?: string;
+}
+
+export const STORAGE_KEYS = {
+  ACTIVE_GROUP_ID: 'hisaab_active_group_id',
+  ACTIVE_TAB: 'hisaab_active_tab',
+  THEME_MODE: 'hisaab_theme_mode',
+  GUEST_MODE: 'hisaab_guest_mode',
+  ONBOARDING_VIEWED: 'hisaab_barabar_onboarding_viewed',
+  CATEGORIES: 'hisaab_categories',
+  REVIEWED_UPIS: 'hisaab_reviewed_upis',
+  DIGEST_TIME: 'hisaab_digest_time',
+  USER_PERSONAL_PAYEE_NAME: 'hisaab_user_personal_payee_name',
+  LOCAL_GROUPS: 'expenses_local_groups',
+  LOCAL_TRANSACTIONS: 'expenses_transactions',
+  LOCAL_SHOPPING: 'expenses_shopping_list',
+  LOCAL_RECURRING: 'expenses_recurring',
+  OFFLINE_MUTATION_QUEUE: 'expenses_offline_queue'
+} as const;

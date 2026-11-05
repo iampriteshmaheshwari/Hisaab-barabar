@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { RecurringExpense, CategoryData, UserRole } from '../../types';
 import { getLocalTodayIso } from '../../services/expenseService';
+import { formatINR } from '../../utils/formatUtils';
 
 interface FixedTabProps {
   recurringExpenses: RecurringExpense[];
@@ -90,7 +91,7 @@ export function FixedTab({
             Monthly Fixed Bills
           </span>
           <div className="text-3xl font-semibold tracking-[-0.03em] text-text-primary mt-0.5">
-            ₹{totalMonthly.toLocaleString('en-IN')}{' '}
+            {formatINR(totalMonthly, { symbol: true })}{' '}
             <span className="text-xs font-normal text-text-secondary">/ mo</span>
           </div>
         </div>
@@ -165,7 +166,7 @@ export function FixedTab({
 
                   <div className="flex items-center gap-2.5 shrink-0">
                     <span className="text-sm sm:text-base font-semibold text-text-primary">
-                      ₹{rec.amount.toLocaleString('en-IN')}
+                      {formatINR(rec.amount, { symbol: true })}
                     </span>
 
                     {canEdit && (
@@ -260,7 +261,7 @@ export function FixedTab({
                   Delete Fixed Bill?
                 </h4>
                 <p className="text-xs sm:text-sm text-text-secondary leading-relaxed">
-                  Are you sure you want to delete <span className="font-semibold text-text-primary">"{billToDelete.name}"</span> (₹{billToDelete.amount.toLocaleString('en-IN')})? This will stop future recurring charges and cannot be undone.
+                  Are you sure you want to delete <span className="font-semibold text-text-primary">"{billToDelete.name}"</span> ({formatINR(billToDelete.amount, { symbol: true })})? This will stop future recurring charges and cannot be undone.
                 </p>
               </div>
 

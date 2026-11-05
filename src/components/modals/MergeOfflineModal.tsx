@@ -15,6 +15,7 @@ import {
   Layers
 } from 'lucide-react';
 import type { ExpenseGroup, Transaction, ShoppingItem, RecurringExpense, CategoryData } from '../../types';
+import { formatINR } from '../../utils/formatUtils';
 
 interface MergeOfflineModalProps {
   isOpen: boolean;
@@ -208,7 +209,7 @@ export function MergeOfflineModal({
                 {totalExpensesCount}
               </div>
               <div className="text-[11px] text-text-secondary truncate w-full font-mono tabular-nums">
-                {totalAmount > 0 ? `₹${totalAmount.toLocaleString('en-IN')}` : '₹0'}
+                {formatINR(totalAmount, { symbol: true })}
               </div>
             </div>
 
@@ -285,7 +286,7 @@ export function MergeOfflineModal({
                         </div>
                       </div>
                       <span className="font-bold text-text-primary shrink-0 font-mono tabular-nums text-xs sm:text-sm">
-                        ₹{Number(tx.amount).toLocaleString('en-IN')}
+                        {formatINR(Number(tx.amount), { symbol: true })}
                       </span>
                     </div>
                   );
@@ -338,7 +339,7 @@ export function MergeOfflineModal({
                       </div>
                     </div>
                     <span className="font-bold text-text-primary shrink-0 font-mono tabular-nums text-xs">
-                      ₹{Number(rec.amount).toLocaleString('en-IN')}
+                      {formatINR(Number(rec.amount), { symbol: true })}
                     </span>
                   </div>
                 ))}

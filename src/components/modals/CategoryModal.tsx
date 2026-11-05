@@ -38,6 +38,7 @@ import {
   Trophy
 } from 'lucide-react';
 import type { CategoryData, Transaction, ShoppingItem, RecurringExpense, UserRole } from '../../types';
+import { formatINR } from '../../utils/formatUtils';
 
 interface CategoryModalProps {
   isOpen: boolean;
@@ -506,7 +507,7 @@ export function CategoryModal({
                                   {stats.txCount > 0 ? (
                                     <>
                                       <span className="font-semibold text-text-primary">
-                                        ₹{stats.spend.toLocaleString('en-IN')}
+                                        {formatINR(stats.spend, { symbol: true })}
                                       </span>
                                       <span>·</span>
                                       <span>
@@ -604,7 +605,7 @@ export function CategoryModal({
                               {stats.txCount > 0 ? (
                                 <>
                                   <span className="font-semibold text-text-primary">
-                                    ₹{stats.spend.toLocaleString('en-IN')}
+                                    {formatINR(stats.spend, { symbol: true })}
                                   </span>
                                   <span>·</span>
                                   <span>
@@ -832,7 +833,7 @@ export function CategoryModal({
                         </span>{' '}
                         {deleteTargetUsage.spend > 0 && (
                           <>
-                            totaling <strong className="text-text-primary">₹{deleteTargetUsage.spend.toLocaleString('en-IN')}</strong>{' '}
+                            totaling <strong className="text-text-primary">{formatINR(deleteTargetUsage.spend, { symbol: true })}</strong>{' '}
                           </>
                         )}
                         will automatically be changed to{' '}

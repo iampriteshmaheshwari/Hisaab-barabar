@@ -16,7 +16,7 @@ import {
   AlertTriangle,
   Info
 } from 'lucide-react';
-import type { ExpenseGroup, Transaction, UserRole } from '../../types';
+import type { ExpenseGroup, Transaction, UserRole, DayGroup } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { 
   getGroupMembersList, 
@@ -116,13 +116,6 @@ function formatDayHeading(dateStr?: string): { displayDate: string; monthKey: st
   }
 
   return { displayDate: `${d} ${shortMonths[m]} ${y}`, monthKey, sortKey };
-}
-
-interface DayGroup {
-  dateKey: string;
-  displayDate: string;
-  sortKey: string;
-  transactions: Transaction[];
 }
 
 export function SplitGroupView({

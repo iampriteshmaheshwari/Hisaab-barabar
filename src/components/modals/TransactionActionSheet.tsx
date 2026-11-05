@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { Transaction, CategoryData } from '../../types';
 import { formatTimeAgo } from '../../services/splitService';
+import { formatINR } from '../../utils/formatUtils';
 
 export interface TransactionActionMenuProps {
   isOpen: boolean;
@@ -193,15 +194,15 @@ export function TransactionActionSheet({
               <p className="text-xs sm:text-sm text-text-secondary leading-relaxed">
                 {transaction.isSettlement ? (
                   <>
-                    Are you sure you want to cancel the settlement of <span className="font-semibold text-text-primary">₹{transaction.amount.toLocaleString('en-IN')}</span>? This will re-open the debt between <span className="font-semibold text-text-primary">{transaction.paidByName || 'Payer'}</span> and <span className="font-semibold text-text-primary">{transaction.settledToName || 'Receiver'}</span>, and restore any cleared bills back to Open.
+                    Are you sure you want to cancel the settlement of <span className="font-semibold text-text-primary">{formatINR(transaction.amount, { symbol: true })}</span>? This will re-open the debt between <span className="font-semibold text-text-primary">{transaction.paidByName || 'Payer'}</span> and <span className="font-semibold text-text-primary">{transaction.settledToName || 'Receiver'}</span>, and restore any cleared bills back to Open.
                   </>
                 ) : transaction.settled || (transaction.settledMembers && transaction.settledMembers.length > 0) ? (
                   <>
-                    Are you sure you want to delete <span className="font-semibold text-text-primary">"{transaction.name}"</span> (₹{transaction.amount.toLocaleString('en-IN')})? This expense was already settled by group members. Deleting it will recalculate all member dues and reopen balances.
+                    Are you sure you want to delete <span className="font-semibold text-text-primary">"{transaction.name}"</span> ({formatINR(transaction.amount, { symbol: true })})? This expense was already settled by group members. Deleting it will recalculate all member dues and reopen balances.
                   </>
                 ) : (
                   <>
-                    Are you sure you want to delete <span className="font-semibold text-text-primary">"{transaction.name}"</span> (₹{transaction.amount.toLocaleString('en-IN')})? It will be moved to Recently Deleted and kept for 30 days.
+                    Are you sure you want to delete <span className="font-semibold text-text-primary">"{transaction.name}"</span> ({formatINR(transaction.amount, { symbol: true })})? It will be moved to Recently Deleted and kept for 30 days.
                   </>
                 )}
               </p>
@@ -267,7 +268,7 @@ export function TransactionActionSheet({
                 <span>{catData.name}</span>
                 <span className="text-text-secondary/40">·</span>
                 <span className="font-semibold font-mono text-text-primary">
-                  ₹{transaction.amount.toLocaleString('en-IN')}
+                  {formatINR(transaction.amount, { symbol: true })}
                 </span>
                 {transaction.settled && !isSplit && (
                   <>

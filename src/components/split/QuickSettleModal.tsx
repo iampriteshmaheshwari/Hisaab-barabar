@@ -23,6 +23,7 @@ import {
   saveMemberUpi,
   getSavedPersonalUpi
 } from '../../utils/upiUtils';
+import { formatINR } from '../../utils/formatUtils';
 
 interface QuickSettleModalProps {
   isOpen: boolean;
@@ -277,7 +278,7 @@ export function QuickSettleModal({
               {isCreditorMe ? `${debtor.name} pays You` : `Paying ${creditor.name}`}
             </span>
             <div className="text-3xl sm:text-4xl font-extrabold text-text-primary tracking-tight tabular-nums">
-              ₹{numAmount.toLocaleString('en-IN')}
+              {formatINR(numAmount, { symbol: true })}
             </div>
 
             {/* Payee UPI ID Badge with 1-tap Copy and Edit */}
@@ -366,7 +367,7 @@ export function QuickSettleModal({
                   className="w-full h-12 rounded-2xl bg-google-blue hover:bg-blue-700 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs active:scale-[0.98]"
                 >
                   <ExternalLink size={16} />
-                  <span>Pay ₹{numAmount.toLocaleString('en-IN')} via UPI</span>
+                  <span>Pay {formatINR(numAmount, { symbol: true })} via UPI</span>
                 </a>
               )}
 
@@ -432,7 +433,7 @@ export function QuickSettleModal({
                   className="w-full h-12 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs active:scale-[0.98]"
                 >
                   <CheckCircle2 size={16} />
-                  <span>Mark ₹{numAmount.toLocaleString('en-IN')} as Received</span>
+                  <span>Mark {formatINR(numAmount, { symbol: true })} as Received</span>
                 </button>
               )}
 
@@ -517,8 +518,8 @@ export function QuickSettleModal({
             <div className="space-y-1">
               <h4 className="font-bold text-base sm:text-lg text-text-primary tracking-tight">
                 {isCreditorMe
-                  ? `Mark ₹${numAmount.toLocaleString('en-IN')} as received?`
-                  : `Settle ₹${numAmount.toLocaleString('en-IN')}?`}
+                  ? `Mark ${formatINR(numAmount, { symbol: true })} as received?`
+                  : `Settle ${formatINR(numAmount, { symbol: true })}?`}
               </h4>
               <p className="text-xs text-text-secondary font-medium">
                 {isDebtorMe ? 'You' : debtor.name} → {isCreditorMe ? 'You' : creditor.name}

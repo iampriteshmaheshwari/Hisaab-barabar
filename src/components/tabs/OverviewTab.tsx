@@ -8,11 +8,12 @@ import {
   MoreVertical,
   Download
 } from 'lucide-react';
-import type { Transaction, CategoryData, UserRole } from '../../types';
+import type { Transaction, CategoryData, UserRole, DayGroup } from '../../types';
 import { ICON_MAP } from '../modals/CategoryModal';
 import { TransactionActionSheet } from '../modals/TransactionActionSheet';
 import { useAuth } from '../../context/AuthContext';
 import { formatSettlementDisplayTitle } from '../../services/splitService';
+import { formatINR } from '../../utils/formatUtils';
 
 interface OverviewTabProps {
   transactions: Transaction[];
@@ -143,13 +144,6 @@ export function OverviewTab({
     (a, b) => b[1] - a[1]
   );
 
-  interface DayGroup {
-    dateKey: string;
-    displayDate: string;
-    dayTotal: number;
-    transactions: Transaction[];
-  }
-
   // Group recent transactions into clean Day Cards matching the Ledger tab
   const recentDayGroups = useMemo(() => {
     const sorted = [...filteredTransactions].sort((a, b) => {
@@ -255,7 +249,7 @@ export function OverviewTab({
             Total Spent
           </span>
           <div className="text-3xl sm:text-4xl font-semibold tracking-[-0.03em] text-text-primary">
-            ₹{totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+            {formatINR(totalAmount, { symbol: true })}
           </div>
         </div>
 
@@ -272,7 +266,7 @@ export function OverviewTab({
                     key={catKey}
                     style={{ width: `${percent}%`, backgroundColor: catData.hex }}
                     className="h-full first:rounded-l-full last:rounded-r-full transition-all duration-300"
-                    title={`${categories[catKey]?.name || catKey}: ₹${val.toLocaleString('en-IN')}`}
+                    title={`${categories[catKey]?.name || catKey}: ${formatINR(val, { symbol: true })}`}
                   />
                 );
               })}
@@ -287,7 +281,7 @@ export function OverviewTab({
                   <div key={catKey} className="flex items-center gap-1.5 min-w-0">
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: catData.hex }} />
                     <span className="text-text-secondary truncate">{catData.name}</span>
-                    <span className="font-medium text-text-primary">₹{val.toLocaleString('en-IN')}</span>
+                    <span className="font-medium text-text-primary">{formatINR(val, { symbol: true })}</span>
                     <span className="text-xs text-text-secondary font-medium">({percent}%)</span>
                   </div>
                 );
@@ -371,7 +365,7 @@ export function OverviewTab({
                     </span>
                   </div>
                   <span className="font-mono font-medium text-text-primary text-xs">
-                    ₹{dayGroup.dayTotal.toLocaleString('en-IN')}
+                    {formatINR(dayGroup.dayTotal, { symbol: true })}
                   </span>
                 </div>
 
@@ -430,11 +424,11 @@ export function OverviewTab({
                         >
                           <div className="text-right min-w-[64px] sm:min-w-[80px]">
                             <div className="text-sm sm:text-base font-semibold text-text-primary tabular-nums">
-                              ₹{tx.amount.toLocaleString('en-IN')}
+                              {formatINR(tx.amount, { symbol: true })}
                             </div>
                             {tx.settled && tx.originalAmount && (
                               <div className="text-xs text-text-secondary line-through tabular-nums">
-                                ₹{tx.originalAmount.toLocaleString('en-IN')}
+                                {formatINR(tx.originalAmount, { symbol: true })}
                               </div>
                             )}
                           </div>
