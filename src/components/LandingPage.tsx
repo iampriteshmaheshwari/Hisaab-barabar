@@ -396,8 +396,8 @@ export function LandingPage({
       </main>
 
       {/* 3. Footer */}
-      <footer className="shrink-0 py-3 sm:py-5 px-4 text-center text-[11px] sm:text-xs text-neutral-400 dark:text-neutral-500 pb-[max(0.75rem,env(safe-area-inset-bottom,12px))] select-none">
-        Made in Bharat · Free forever · Settle via UPI
+      <footer className="shrink-0 py-3 sm:py-5 px-4 text-center text-[11px] sm:text-xs font-medium tracking-wide text-neutral-400/80 dark:text-neutral-500/80 pb-[max(0.75rem,env(safe-area-inset-bottom,12px))] select-none">
+        Crafted with ❤️ in Bharat
       </footer>
     </div>
   );

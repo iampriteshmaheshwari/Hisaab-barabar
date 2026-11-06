@@ -7,20 +7,17 @@ import {
   CheckCircle2,
   Copy,
   Check,
-  Edit2
+  MessageCircle
 } from 'lucide-react';
 import type { ExpenseGroup, UserRole } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { recordSettlementPayment, canMarkAsReceived } from '../../services/splitService';
-import { updateGroupMemberUpi } from '../../services/expenseService';
 import { 
   formatUpiId, 
   isValidUpiId, 
   buildUpiPaymentUri, 
   buildUpiAppLinks,
   generateUpiQrDataUrl,
-  getSavedMemberUpi,
-  saveMemberUpi,
   getSavedPersonalUpi
 } from '../../utils/upiUtils';
 import { formatINR } from '../../utils/formatUtils';
@@ -52,17 +49,9 @@ export function QuickSettleModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   const [showConfirmSettle, setShowConfirmSettle] = useState(false);
-
-  // UPI configuration
-  const [rawUpiInput, setRawUpiInput] = useState('');
-  const [isEditingUpi, setIsEditingUpi] = useState(false);
-  const [saveUpiForFuture, setSaveUpiForFuture] = useState(true);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [showQrOnMobile, setShowQrOnMobile] = useState(false);
   const [copiedUpi, setCopiedUpi] = useState(false);
-
-  // Track whether creditor already had a UPI ID mentioned/saved
-  const [creditorHasExistingUpi, setCreditorHasExistingUpi] = useState(false);
 
   // Check if current user is debtor (payer) or creditor (receiver)
   const isDebtorMe = debtor.key === user?.uid || (!user && (debtor.key === 'guest' || debtor.name === 'You'));
@@ -75,35 +64,26 @@ export function QuickSettleModal({
       setAmount(suggestedAmount > 0 ? suggestedAmount.toString() : '');
       setShowQrOnMobile(false);
       setShowConfirmSettle(false);
-
-      // Find existing saved UPI for creditor
-      let foundUpi = '';
-      if (isCreditorMe) {
-        foundUpi = getSavedPersonalUpi() || group.members?.[creditor.key]?.upiId || '';
-      } else {
-        foundUpi = group.members?.[creditor.key]?.upiId || 
-                   getSavedMemberUpi(creditor.key) || 
-                   getSavedMemberUpi(creditor.name) || 
-                   '';
-      }
-
-      const hasUpi = Boolean(foundUpi && foundUpi.trim());
-      setCreditorHasExistingUpi(hasUpi);
-      setRawUpiInput(foundUpi);
-      setIsEditingUpi(!hasUpi);
     }
-  }, [isOpen, suggestedAmount, creditor, group.members, isCreditorMe]);
+  }, [isOpen, suggestedAmount]);
 
   const numAmount = parseFloat(amount) || 0;
 
-  // Formatted UPI ID
+  // Payee UPI ID from user-level profile (Single Source of Truth)
+  const payeeUpi = useMemo(() => {
+    if (isCreditorMe) {
+      return getSavedPersonalUpi() || group.members?.[creditor.key]?.upiId || '';
+    }
+    return group.members?.[creditor.key]?.upiId || '';
+  }, [isCreditorMe, creditor.key, group.members]);
+
   const effectiveUpiId = useMemo(() => {
-    return formatUpiId(rawUpiInput);
-  }, [rawUpiInput]);
+    return formatUpiId(payeeUpi);
+  }, [payeeUpi]);
 
   const isUpiValid = useMemo(() => {
-    return isValidUpiId(rawUpiInput);
-  }, [rawUpiInput]);
+    return isValidUpiId(effectiveUpiId);
+  }, [effectiveUpiId]);
 
   // Build standard NPCI UPI Payment URI
   const upiUri = useMemo(() => {
@@ -115,7 +95,7 @@ export function QuickSettleModal({
     });
   }, [effectiveUpiId, isUpiValid, numAmount, group.name]);
 
-  // Build app-specific direct deep links
+  // Direct UPI App deep links
   const upiAppLinks = useMemo(() => {
     if (!effectiveUpiId || !isUpiValid) return null;
     return buildUpiAppLinks({
@@ -149,28 +129,13 @@ export function QuickSettleModal({
     setTimeout(() => setCopiedUpi(false), 2000);
   };
 
-  const handleSaveUpi = () => {
-    if (!isUpiValid) {
-      setErrorNotice('Please enter a valid UPI ID (e.g. name@bank)');
-      return;
-    }
-    setErrorNotice(null);
-    setIsEditingUpi(false);
+  // WhatsApp reminder deep link for payee without UPI
+  const whatsappReminderUrl = useMemo(() => {
+    const text = `Hi ${creditor.name}, please link your receiving UPI ID on Hisaab Barabar so I can settle ${formatINR(numAmount, { symbol: true })} for "${group.name}".`;
+    return `https://wa.me/?text=${encodeURIComponent(text)}`;
+  }, [creditor.name, numAmount, group.name]);
 
-    if (effectiveUpiId && saveUpiForFuture) {
-      saveMemberUpi(creditor.key, effectiveUpiId);
-      saveMemberUpi(creditor.name, effectiveUpiId);
-      if (group && creditor.key) {
-        const payerName = user?.displayName || user?.email?.split('@')[0] || 'A group member';
-        updateGroupMemberUpi(group, creditor.key, effectiveUpiId, {
-          addedByName: payerName,
-          pendingConfirmation: true
-        }).catch(console.warn);
-      }
-    }
-  };
-
-  // Execute recording settlement after 1-tap confirmation
+  // Execute recording settlement
   const handleConfirmAndRecord = async () => {
     if (userRole === 'viewer') return;
     if (numAmount <= 0) {
@@ -189,7 +154,7 @@ export function QuickSettleModal({
         creditor,
         numAmount,
         today,
-        'Settled via UPI',
+        effectiveUpiId ? 'Settled via UPI' : 'Settled (Direct)',
         user,
         group,
         userRole
@@ -215,12 +180,10 @@ export function QuickSettleModal({
       return;
     }
 
-    // Attempt direct app launch
+    // Direct app launch with fallback to universal intent
     const start = Date.now();
     window.location.href = appScheme;
 
-    // If app is not installed, the page stays in focus without navigating away.
-    // Gracefully fallback to standard universal UPI intent so the OS app-chooser opens.
     setTimeout(() => {
       if (typeof document !== 'undefined' && document.hasFocus() && Date.now() - start < 2000) {
         window.location.href = upiUri;
@@ -229,6 +192,8 @@ export function QuickSettleModal({
   };
 
   if (!isOpen) return null;
+
+  const markPerm = canMarkAsReceived(debtor.key, creditor.key, user, userRole, group);
 
   return (
     <div 
@@ -244,7 +209,7 @@ export function QuickSettleModal({
           <div className="w-10 h-1 rounded-full bg-surface-active" />
         </div>
 
-        {/* Header - Minimal, Subtle */}
+        {/* Minimal Header */}
         <div className="px-5 py-3.5 border-b border-border flex items-center justify-between shrink-0">
           <div className="min-w-0 pr-2">
             <span className="text-base font-bold text-text-primary block leading-tight truncate">
@@ -272,7 +237,7 @@ export function QuickSettleModal({
         )}
 
         <div className="p-4 sm:p-5 overflow-y-auto no-scrollbar space-y-4 flex-1">
-          {/* Unified Payee & Amount Hero (Apple Pay / Google Wallet Style) */}
+          {/* Subtle Hero Card */}
           <div className="p-4 sm:p-5 rounded-3xl bg-surface-hover/50 border border-border text-center space-y-1.5">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary block">
               {isCreditorMe ? `${debtor.name} pays You` : `Paying ${creditor.name}`}
@@ -281,86 +246,44 @@ export function QuickSettleModal({
               {formatINR(numAmount, { symbol: true })}
             </div>
 
-            {/* Payee UPI ID Badge with 1-tap Copy and Edit */}
+            {/* Payee UPI Status Badge */}
             <div className="pt-1 flex items-center justify-center">
-              {isEditingUpi ? (
-                <div className="w-full max-w-xs space-y-2.5 text-left pt-1">
-                  <input
-                    type="text"
-                    value={rawUpiInput}
-                    onChange={(e) => setRawUpiInput(e.target.value)}
-                    placeholder="e.g. name@okhdfcbank"
-                    className="w-full px-3 py-2 rounded-xl bg-surface border border-border text-xs sm:text-sm text-text-primary outline-none focus:border-google-blue font-sans transition-colors"
-                    autoFocus
-                  />
-                  {rawUpiInput && !isUpiValid && (
-                    <p className="text-[11px] text-google-red">
-                      Format: username@bank
-                    </p>
-                  )}
-                  {/* Action buttons moved to next line */}
-                  <div className="flex items-center justify-end gap-2">
-                    {creditorHasExistingUpi && (
-                      <button
-                        type="button"
-                        onClick={() => setIsEditingUpi(false)}
-                        className="px-3 py-1.5 rounded-xl text-text-secondary hover:text-text-primary text-xs font-medium cursor-pointer transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={handleSaveUpi}
-                      disabled={!isUpiValid}
-                      className="px-3.5 py-1.5 rounded-xl bg-google-blue hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-semibold cursor-pointer transition-all active:scale-95 shadow-2xs"
-                    >
-                      Save UPI ID
-                    </button>
-                  </div>
-                </div>
-              ) : (
+              {isUpiValid ? (
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface border border-border shadow-2xs">
                   <span className="text-xs font-semibold text-text-primary truncate max-w-[200px] tracking-tight">
-                    {effectiveUpiId || 'No UPI ID saved'}
+                    {effectiveUpiId}
                   </span>
-                  {effectiveUpiId && (
-                    <button
-                      type="button"
-                      onClick={handleCopyUpi}
-                      className="text-text-secondary hover:text-text-primary transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-medium"
-                      title="Copy UPI ID"
-                    >
-                      {copiedUpi ? (
-                        <>
-                          <Check size={12} className="text-emerald-500" />
-                          <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Copied</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={12} />
-                          <span>Copy</span>
-                        </>
-                      )}
-                    </button>
-                  )}
                   <button
                     type="button"
-                    onClick={() => setIsEditingUpi(true)}
-                    className="text-text-secondary hover:text-google-blue pl-1 border-l border-border transition-colors cursor-pointer"
-                    title="Edit UPI ID"
+                    onClick={handleCopyUpi}
+                    className="text-text-secondary hover:text-text-primary transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-medium"
+                    title="Copy UPI ID"
                   >
-                    <Edit2 size={11} />
+                    {copiedUpi ? (
+                      <>
+                        <Check size={12} className="text-emerald-500" />
+                        <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy size={12} />
+                        <span>Copy</span>
+                      </>
+                    )}
                   </button>
                 </div>
+              ) : (
+                <span className="text-xs text-text-secondary">
+                  No UPI ID linked
+                </span>
               )}
             </div>
           </div>
 
-          {/* UPI Payment Flow: Zero Cognitive Load */}
-          {effectiveUpiId && isUpiValid ? (
+          {/* Settle Actions */}
+          {isUpiValid ? (
             <div className="space-y-4 pt-0.5">
-              {/* Primary Mobile Launch Button (Debtor only) */}
+              {/* Primary Launch (Debtor only) */}
               {isDebtorMe && (
                 <a
                   href={upiUri}
@@ -371,7 +294,7 @@ export function QuickSettleModal({
                 </a>
               )}
 
-              {/* Direct UPI Apps (Debtor only): Simple minimalist tile buttons with name of apps */}
+              {/* Direct UPI Apps */}
               {isDebtorMe && upiAppLinks && (
                 <div className="space-y-2">
                   <span className="text-xs font-medium text-text-secondary block text-center">
@@ -425,7 +348,7 @@ export function QuickSettleModal({
                 </div>
               )}
 
-              {/* Receiver Action (Creditor only): One-tap Mark as Received */}
+              {/* Receiver Action (Creditor only) */}
               {isCreditorMe && (
                 <button
                   type="button"
@@ -437,7 +360,7 @@ export function QuickSettleModal({
                 </button>
               )}
 
-              {/* QR Code Toggle / Display - Flawlessly Centered in Mobile & Desktop */}
+              {/* Minimal QR Code Toggle */}
               <div className="w-full flex flex-col items-center justify-center pt-1">
                 <button
                   type="button"
@@ -457,7 +380,7 @@ export function QuickSettleModal({
                         className="w-48 h-48 sm:w-52 sm:h-52 object-contain mx-auto"
                       />
                       <p className="text-[11px] text-neutral-500 mt-2 font-medium tracking-wide text-center">
-                        Scan with any UPI app or camera
+                        Scan with any UPI app
                       </p>
                     </div>
                   </div>
@@ -465,39 +388,83 @@ export function QuickSettleModal({
               </div>
             </div>
           ) : (
-            <div className="py-6 text-center text-xs text-text-secondary space-y-1">
-              <p>Add {creditor.name}&apos;s UPI ID above to enable instant 1-tap payments.</p>
-            </div>
-          )}
-
-          {/* Subtle Secondary Helper: Zero Cognitive Load (Debtor only) */}
-          {isDebtorMe && (() => {
-            const markPerm = canMarkAsReceived(debtor.key, creditor.key, user, userRole, group);
-            return (
-              <div className="pt-3 pb-1 border-t border-border/50 text-center">
+            /* Payee Has No UPI Linked */
+            <div className="space-y-3 pt-1">
+              <div className="p-4 rounded-2xl bg-surface-hover/60 border border-border text-center space-y-1.5">
                 <p className="text-xs text-text-secondary">
-                  Already completed payment?{' '}
+                  {isCreditorMe 
+                    ? 'Link your UPI ID in Settings to receive payments via QR & UPI apps.' 
+                    : `${creditor.name} hasn't linked a UPI ID yet.`}
+                </p>
+              </div>
+
+              {isDebtorMe && (
+                <div className="space-y-2">
+                  <a
+                    href={whatsappReminderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full h-11 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs active:scale-[0.98]"
+                  >
+                    <MessageCircle size={16} />
+                    <span>Remind {creditor.name} on WhatsApp</span>
+                  </a>
+
                   <button
                     type="button"
                     onClick={() => {
                       if (!markPerm.allowed) {
-                        setErrorNotice(markPerm.reason || 'Only the receiver or group owner can mark as received.');
+                        setErrorNotice(markPerm.reason || 'Only the receiver or group owner can mark as settled.');
                         return;
                       }
                       setShowConfirmSettle(true);
                     }}
-                    className={markPerm.allowed 
-                      ? "text-emerald-600 dark:text-emerald-400 font-semibold hover:underline cursor-pointer ml-0.5 inline-flex items-center gap-1"
-                      : "text-text-muted opacity-60 font-semibold cursor-not-allowed ml-0.5 inline-flex items-center gap-1"}
-                    title={!markPerm.allowed ? (markPerm.reason || 'Only the receiver or group owner can mark as received.') : undefined}
+                    className="w-full h-11 rounded-2xl bg-surface-hover hover:bg-surface-active border border-border text-text-primary text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-[0.98]"
                   >
-                    <CheckCircle2 size={13} className="inline shrink-0" />
-                    <span>Mark as settled</span>
+                    <CheckCircle2 size={15} />
+                    <span>Mark as Settled (Cash / Bank)</span>
                   </button>
-                </p>
-              </div>
-            );
-          })()}
+                </div>
+              )}
+
+              {isCreditorMe && (
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmSettle(true)}
+                  className="w-full h-11 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs active:scale-[0.98]"
+                >
+                  <CheckCircle2 size={16} />
+                  <span>Mark {formatINR(numAmount, { symbol: true })} as Received</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Subtle Secondary Helper (Debtor only with UPI) */}
+          {isDebtorMe && isUpiValid && (
+            <div className="pt-3 pb-1 border-t border-border/50 text-center">
+              <p className="text-xs text-text-secondary">
+                Already completed payment?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!markPerm.allowed) {
+                      setErrorNotice(markPerm.reason || 'Only the receiver or group owner can mark as received.');
+                      return;
+                    }
+                    setShowConfirmSettle(true);
+                  }}
+                  className={markPerm.allowed 
+                    ? "text-emerald-600 dark:text-emerald-400 font-semibold hover:underline cursor-pointer ml-0.5 inline-flex items-center gap-1"
+                    : "text-text-muted opacity-60 font-semibold cursor-not-allowed ml-0.5 inline-flex items-center gap-1"}
+                  title={!markPerm.allowed ? (markPerm.reason || 'Only the receiver or group owner can mark as received.') : undefined}
+                >
+                  <CheckCircle2 size={13} className="inline shrink-0" />
+                  <span>Mark as settled</span>
+                </button>
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -541,7 +508,7 @@ export function QuickSettleModal({
                 onClick={handleConfirmAndRecord}
                 className="flex-1 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold cursor-pointer transition-colors shadow-xs active:scale-95 disabled:opacity-50"
               >
-                {isSubmitting ? 'Saving...' : (isCreditorMe ? 'Confirm Received' : 'Mark Paid')}
+                {isSubmitting ? 'Saving...' : (isCreditorMe ? 'Confirm' : 'Mark Paid')}
               </button>
             </div>
           </div>

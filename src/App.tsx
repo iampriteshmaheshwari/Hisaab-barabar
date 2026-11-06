@@ -58,7 +58,6 @@ import { SplitIndividualView } from './components/split/SplitIndividualView';
 import { SplitExpenseModal } from './components/split/SplitExpenseModal';
 import { QuickSettleModal } from './components/split/QuickSettleModal';
 import { InviteMemberModal } from './components/modals/InviteMemberModal';
-import { UpiReviewModal } from './components/modals/UpiReviewModal';
 import { 
   getGroupMembersList, 
   recordSettlementPayment, 
@@ -423,6 +422,15 @@ export default function App() {
 
   // Post-Sign In Profile Setup (Full Name & UPI Verification)
   const [showProfileSetupModal, setShowProfileSetupModal] = useState<boolean>(false);
+  const [currentUserUpi, setCurrentUserUpi] = useState<string>(() => getSavedPersonalUpi());
+
+  useEffect(() => {
+    if (user) {
+      setCurrentUserUpi(getSavedPersonalUpi());
+    } else {
+      setCurrentUserUpi('');
+    }
+  }, [user?.uid]);
 
   useEffect(() => {
     if (user && !authLoading) {
@@ -470,6 +478,10 @@ export default function App() {
       // 3. Save local UPI ID if entered
       if (upiId) {
         savePersonalUpi(upiId);
+        setCurrentUserUpi(upiId);
+      } else {
+        removePersonalUpi();
+        setCurrentUserUpi('');
       }
 
       // 4. Update member details in active group if cloud group
@@ -501,14 +513,6 @@ export default function App() {
       });
     }
   };
-
-  // Recipient UPI review state (prompting member when a friend added their UPI)
-  const [pendingUpiReview, setPendingUpiReview] = useState<{
-    upiId: string;
-    group: ExpenseGroup;
-    memberKey: string;
-    addedBy?: string;
-  } | null>(null);
 
   // Standalone PWA detection (iOS Safari, Android standalone, Desktop Chrome/Edge)
   const [isStandalone, setIsStandalone] = useState<boolean>(() => {
@@ -872,111 +876,6 @@ export default function App() {
     return () => window.removeEventListener('popstate', handleUrlActions);
   }, [groups, activeGroupId]);
 
-  // Check if any group has an unconfirmed UPI ID added for the current user
-  useEffect(() => {
-    if (!groups || groups.length === 0) return;
-    
-    const myUid = user?.uid;
-    const myEmail = (user?.email || '').toLowerCase().trim();
-    if (!myUid && !myEmail) return;
-
-    let reviewedUpis: string[] = [];
-    try {
-      const stored = localStorage.getItem('hisaab_reviewed_upis');
-      if (stored) reviewedUpis = JSON.parse(stored);
-    } catch {}
-
-    const myCurrentPersonalUpi = getSavedPersonalUpi().toLowerCase().trim();
-
-    for (const grp of groups) {
-      if (!grp.members) continue;
-      for (const [key, m] of Object.entries(grp.members)) {
-        const isMe = (myUid && m.uid === myUid) || 
-                     (myEmail && (m.email?.toLowerCase() === myEmail || key.toLowerCase() === myEmail)) ||
-                     (myUid && key === myUid);
-        if (isMe && m.upiId) {
-          const cleanUpi = m.upiId.trim().toLowerCase();
-          const alreadyReviewed = reviewedUpis.includes(cleanUpi);
-          if (!alreadyReviewed && (m.upiPendingConfirmation || !myCurrentPersonalUpi)) {
-            setPendingUpiReview({
-              upiId: cleanUpi,
-              group: grp,
-              memberKey: key,
-              addedBy: m.upiAddedBy
-            });
-            return;
-          }
-        }
-      }
-    }
-  }, [groups, user]);
-
-  const handleConfirmUpiReview = async (confirmedUpi: string) => {
-    if (!pendingUpiReview) return;
-    const { group, memberKey } = pendingUpiReview;
-
-    savePersonalUpi(confirmedUpi);
-
-    try {
-      const stored = localStorage.getItem('hisaab_reviewed_upis');
-      const list: string[] = stored ? JSON.parse(stored) : [];
-      if (!list.includes(confirmedUpi)) list.push(confirmedUpi);
-      localStorage.setItem('hisaab_reviewed_upis', JSON.stringify(list));
-    } catch {}
-
-    await updateGroupMemberUpi(group, memberKey, confirmedUpi, {
-      pendingConfirmation: false
-    });
-
-    if (user) {
-      try {
-        await setDoc(
-          doc(db, 'users', user.uid),
-          { upiId: confirmedUpi },
-          { merge: true }
-        );
-      } catch (err) {
-        console.warn('Could not sync user profile UPI to Firestore:', err);
-      }
-    }
-
-    setToastMessage('UPI ID confirmed for your profile');
-    setPendingUpiReview(null);
-  };
-
-  const handleRemoveUpiReview = async () => {
-    if (!pendingUpiReview) return;
-    const { group, memberKey, upiId } = pendingUpiReview;
-
-    removePersonalUpi();
-
-    try {
-      const stored = localStorage.getItem('hisaab_reviewed_upis');
-      const list: string[] = stored ? JSON.parse(stored) : [];
-      if (!list.includes(upiId)) list.push(upiId);
-      localStorage.setItem('hisaab_reviewed_upis', JSON.stringify(list));
-    } catch {}
-
-    await updateGroupMemberUpi(group, memberKey, '', {
-      pendingConfirmation: false
-    });
-
-    if (user) {
-      try {
-        await setDoc(
-          doc(db, 'users', user.uid),
-          { upiId: '' },
-          { merge: true }
-        );
-      } catch (err) {
-        console.warn('Could not clear user profile UPI in Firestore:', err);
-      }
-    }
-
-    setToastMessage('UPI ID removed');
-    setPendingUpiReview(null);
-  };
-
   // Android & Mobile Browser Hardware/Gesture Back Button handling for modals
   const isAnyModalOpen = Boolean(
     showExpenseModal || 
@@ -994,8 +893,7 @@ export default function App() {
     showDeleteAccountModal || 
     showResetDataModal || 
     showInstallModal || 
-    ledgerContextGroup ||
-    pendingUpiReview
+    ledgerContextGroup
   );
 
   const modalPushedRef = useRef(false);
@@ -1027,7 +925,6 @@ export default function App() {
         setShowResetDataModal(false);
         setShowInstallModal(false);
         setLedgerContextGroup(null);
-        setPendingUpiReview(null);
       };
 
       window.addEventListener('popstate', handlePopState, { once: true });
@@ -3901,6 +3798,7 @@ export default function App() {
         digestTime={digestTime}
         isStandalone={isStandalone}
         onOpenInstallModal={() => setShowInstallModal(true)}
+        onOpenProfileSetup={() => setShowProfileSetupModal(true)}
       />
 
       {/* Main Tab Content */}
@@ -3955,6 +3853,7 @@ export default function App() {
               onOpenInstallModal={() => setShowInstallModal(true)}
               onOpenJoinModal={() => setShowJoinModal(true)}
               onOpenProfileSetup={() => setShowProfileSetupModal(true)}
+              currentUserUpi={currentUserUpi}
               pendingSyncCount={pendingSyncCount}
               geminiEnabled={false}
               onToggleGemini={handleToggleGemini}
@@ -4093,6 +3992,7 @@ export default function App() {
                 onOpenInstallModal={() => setShowInstallModal(true)}
                 onOpenJoinModal={() => setShowJoinModal(true)}
                 onOpenProfileSetup={() => setShowProfileSetupModal(true)}
+                currentUserUpi={currentUserUpi}
                 pendingSyncCount={pendingSyncCount}
                 geminiEnabled={effectiveGeminiEnabled}
                 onToggleGemini={handleToggleGemini}
@@ -4371,10 +4271,11 @@ export default function App() {
         }}
       />
 
-      {/* Post-Sign In Profile Completion (Full Name & UPI ID) */}
+      {/* Post-Sign In Profile Completion & Edit (Full Name & UPI ID) */}
       <ProfileSetupModal
         isOpen={showProfileSetupModal && Boolean(user)}
         user={user}
+        onClose={() => setShowProfileSetupModal(false)}
         onComplete={handleCompleteProfileSetup}
       />
 

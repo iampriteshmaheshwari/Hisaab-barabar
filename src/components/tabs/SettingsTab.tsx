@@ -88,6 +88,7 @@ interface SettingsTabProps {
   onOpenInstallModal?: () => void;
   onOpenJoinModal?: () => void;
   onOpenProfileSetup?: () => void;
+  currentUserUpi?: string;
   pendingSyncCount?: number;
   onOpenInviteModal?: () => void;
   onTriggerTestSplitNotification?: () => void;
@@ -129,6 +130,7 @@ export function SettingsTab({
   onOpenInstallModal,
   onOpenJoinModal,
   onOpenProfileSetup,
+  currentUserUpi,
   pendingSyncCount = 0,
   onOpenInviteModal,
   onTriggerTestSplitNotification
@@ -166,69 +168,29 @@ export function SettingsTab({
   const isSplit = activeGroup?.type === 'split';
   const [isTestingSplit, setIsTestingSplit] = useState(false);
 
-  // Personal UPI Settings State
-  const [personalUpi, setPersonalUpi] = useState(() => getSavedPersonalUpi());
-  const [savedUpi, setSavedUpi] = useState(() => getSavedPersonalUpi());
-  const [upiSaveNotice, setUpiSaveNotice] = useState<string | null>(null);
+  // Synchronized Personal UPI ID (Single Source of Truth)
+  const effectiveUpi = currentUserUpi !== undefined ? currentUserUpi : (getSavedPersonalUpi() || '');
   const [showPersonalQr, setShowPersonalQr] = useState(false);
   const [personalQrUrl, setPersonalQrUrl] = useState('');
   const [copiedPersonalUpi, setCopiedPersonalUpi] = useState(false);
 
-  const formattedPersonalUpi = formatUpiId(personalUpi);
-  const isPersonalUpiValid = isValidUpiId(personalUpi);
-
   // Generate QR code for saved receiving UPI ID
   React.useEffect(() => {
     let active = true;
-    if (savedUpi && isValidUpiId(savedUpi) && showPersonalQr) {
-      // Intentionally omit payee name (pn) so the QR code never embeds the webapp login name.
-      // The payer's UPI app queries NPCI to display the real, bank-verified account holder name.
+    if (effectiveUpi && isValidUpiId(effectiveUpi) && showPersonalQr) {
       const personalUri = buildUpiPaymentUri({
-        pa: savedUpi
+        pa: effectiveUpi
       });
       generateUpiQrDataUrl(personalUri)
         .then(url => {
           if (active) setPersonalQrUrl(url);
         })
         .catch(console.warn);
+    } else {
+      setPersonalQrUrl('');
     }
     return () => { active = false; };
-  }, [savedUpi, showPersonalQr]);
-
-  const handleSavePersonalUpi = async () => {
-    const cleanUpi = formatUpiId(personalUpi);
-    if (!cleanUpi) {
-      removePersonalUpi();
-      setSavedUpi('');
-      if (activeGroup && user) {
-        updateGroupMemberUpi(activeGroup, user.uid, '').catch(console.warn);
-      }
-      setShowPersonalQr(false);
-      setUpiSaveNotice('UPI ID removed');
-      setTimeout(() => setUpiSaveNotice(null), 2000);
-      return;
-    }
-
-    savePersonalUpi(cleanUpi);
-    setSavedUpi(cleanUpi);
-    if (activeGroup && user) {
-      updateGroupMemberUpi(activeGroup, user.uid, cleanUpi).catch(console.warn);
-    }
-    setUpiSaveNotice('UPI ID saved');
-    setTimeout(() => setUpiSaveNotice(null), 2000);
-  };
-
-  const handleClearPersonalUpi = async () => {
-    setPersonalUpi('');
-    setSavedUpi('');
-    removePersonalUpi();
-    if (activeGroup && user) {
-      updateGroupMemberUpi(activeGroup, user.uid, '').catch(console.warn);
-    }
-    setShowPersonalQr(false);
-    setUpiSaveNotice('UPI ID removed');
-    setTimeout(() => setUpiSaveNotice(null), 2000);
-  };
+  }, [effectiveUpi, showPersonalQr]);
 
   const handleTestSplitAlert = async () => {
     if (!onTriggerTestSplitNotification) return;
@@ -257,15 +219,16 @@ export function SettingsTab({
 
   return (
     <div className="space-y-3 sm:space-y-4 font-sans">
-      {/* Account Section (iOS / M3 Settings Group) */}
+      {/* Profile & Receiving Payment Identity */}
       <div className="space-y-1.5">
         <div className="px-1 text-xs font-semibold uppercase tracking-tight text-text-secondary">
-          Account &amp; Privacy
+          Profile &amp; Payment Identity
         </div>
 
         <div className="bg-surface rounded-3xl border border-border divide-y divide-border overflow-hidden shadow-xs">
           {user ? (
             <>
+              {/* Profile Details Row */}
               <div className="p-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
                   {user.photoURL ? (
@@ -285,15 +248,6 @@ export function SettingsTab({
                       <span className="text-sm font-semibold text-text-primary truncate">
                         {user.displayName || 'Account'}
                       </span>
-                      {onOpenProfileSetup && (
-                        <button
-                          type="button"
-                          onClick={onOpenProfileSetup}
-                          className="text-[11px] font-medium text-google-blue hover:underline cursor-pointer"
-                        >
-                          Edit
-                        </button>
-                      )}
                     </div>
                     <div className="text-xs text-text-secondary truncate">
                       {user.email}
@@ -301,19 +255,128 @@ export function SettingsTab({
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (pendingSyncCount && pendingSyncCount > 0) {
-                      setShowPendingSignOutConfirm(true);
-                      return;
-                    }
-                    logOut();
-                  }}
-                  className="px-3 py-1.5 rounded-full border border-border hover:bg-surface-hover text-xs font-semibold text-text-primary hover:text-google-red transition-colors cursor-pointer shrink-0"
-                >
-                  Sign out
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  {onOpenProfileSetup && (
+                    <button
+                      type="button"
+                      onClick={onOpenProfileSetup}
+                      className="px-3 py-1.5 rounded-full border border-border hover:bg-surface-hover text-xs font-semibold text-text-primary hover:text-google-blue transition-colors cursor-pointer"
+                    >
+                      Edit
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (pendingSyncCount && pendingSyncCount > 0) {
+                        setShowPendingSignOutConfirm(true);
+                        return;
+                      }
+                      logOut();
+                    }}
+                    className="px-3 py-1.5 rounded-full border border-border hover:bg-surface-hover text-xs font-semibold text-text-secondary hover:text-google-red transition-colors cursor-pointer"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              </div>
+
+              {/* Receiving UPI ID & QR Code Row */}
+              <div className="p-4 bg-surface-hover/30 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0">
+                      <Smartphone size={17} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-text-secondary block">
+                        Receiving UPI ID
+                      </span>
+                      {effectiveUpi ? (
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-xs sm:text-sm font-mono font-medium text-text-primary truncate">
+                            {effectiveUpi}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(effectiveUpi);
+                                setCopiedPersonalUpi(true);
+                                setTimeout(() => setCopiedPersonalUpi(false), 2000);
+                              } catch {}
+                            }}
+                            className="text-text-secondary hover:text-text-primary transition-colors cursor-pointer flex items-center gap-1 text-xs"
+                            title="Copy UPI ID"
+                          >
+                            {copiedPersonalUpi ? (
+                              <span className="text-emerald-600 dark:text-emerald-400 font-semibold text-[11px] flex items-center gap-0.5">
+                                <Check size={11} strokeWidth={2.5} />
+                                Copied
+                              </span>
+                            ) : (
+                              <Copy size={12} />
+                            )}
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-text-secondary block mt-0.5">
+                          No UPI ID linked yet
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {effectiveUpi ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setShowPersonalQr(!showPersonalQr)}
+                          className="h-8 px-3 rounded-xl bg-surface hover:bg-surface-hover border border-border text-text-primary font-medium text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                        >
+                          <QrCode size={13} />
+                          <span>{showPersonalQr ? 'Hide QR' : 'Show QR'}</span>
+                        </button>
+                        {onOpenProfileSetup && (
+                          <button
+                            type="button"
+                            onClick={onOpenProfileSetup}
+                            className="h-8 px-2.5 rounded-xl text-text-secondary hover:text-google-blue hover:bg-surface text-xs font-medium cursor-pointer transition-colors"
+                          >
+                            Change
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      onOpenProfileSetup && (
+                        <button
+                          type="button"
+                          onClick={onOpenProfileSetup}
+                          className="h-8 px-3.5 rounded-xl bg-google-blue hover:bg-blue-700 text-white font-medium text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-xs"
+                        >
+                          <span>+ Link UPI ID</span>
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                {/* Instant QR Code Display */}
+                {showPersonalQr && personalQrUrl && effectiveUpi && (
+                  <div className="pt-2 pb-1 flex flex-col items-center justify-center text-center space-y-2 animate-in fade-in duration-200">
+                    <div className="p-3.5 bg-white rounded-2xl shadow-sm border border-neutral-200">
+                      <img 
+                        src={personalQrUrl} 
+                        alt="Receiving UPI QR" 
+                        className="w-44 h-44 sm:w-48 sm:h-48 object-contain mx-auto"
+                      />
+                      <p className="text-[11px] text-neutral-500 mt-2 font-medium tracking-wide">
+                        Scan with any UPI app to pay {user.displayName || 'You'} directly
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Delete Account Action (Apple HIG / Google Material 3 Guideline) */}
@@ -426,132 +489,6 @@ export function SettingsTab({
               {syncError}
             </div>
           )}
-        </div>
-      </div>
-
-      {/* UPI Settlements Card */}
-      <div className="space-y-1.5">
-        <div className="px-1 text-xs font-semibold uppercase tracking-tight text-text-secondary">
-          UPI Settlements
-        </div>
-
-        <div className="bg-surface rounded-3xl border border-border p-4 sm:p-5 space-y-3 shadow-xs">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-google-blue/10 text-google-blue flex items-center justify-center shrink-0">
-              <Smartphone size={17} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-text-primary leading-tight">
-                Your UPI ID
-              </div>
-              <p className="text-xs text-text-secondary leading-snug mt-0.5">
-                Receive settlements directly via QR &amp; UPI apps
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-2.5 pt-0.5">
-            <div>
-              <input
-                type="text"
-                value={personalUpi}
-                onChange={(e) => setPersonalUpi(e.target.value)}
-                placeholder="e.g. yourname@oksbi"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-surface-hover border border-border text-xs sm:text-sm text-text-primary font-mono outline-none focus:border-google-blue placeholder:text-text-secondary/50 placeholder:font-sans"
-              />
-            </div>
-
-            {/* Action Buttons Row (One single line, space-conscious) */}
-            <div className="flex items-center gap-2 flex-nowrap overflow-x-auto no-scrollbar pt-0.5">
-              <button
-                type="button"
-                onClick={handleSavePersonalUpi}
-                disabled={!isPersonalUpiValid && personalUpi.trim().length > 0}
-                className="h-9 px-3.5 rounded-xl bg-google-blue hover:bg-blue-700 disabled:opacity-40 text-white font-medium text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-xs shrink-0 whitespace-nowrap"
-              >
-                {upiSaveNotice === 'UPI ID saved' ? (
-                  <>
-                    <Check size={14} className="text-white" />
-                    <span>Saved!</span>
-                  </>
-                ) : (
-                  <span>Save UPI ID</span>
-                )}
-              </button>
-
-              {/* View My QR: Only visible once UPI ID is saved */}
-              {savedUpi && isValidUpiId(savedUpi) && (
-                <button
-                  type="button"
-                  onClick={() => setShowPersonalQr(!showPersonalQr)}
-                  className="h-9 px-3 rounded-xl bg-surface hover:bg-surface-hover border border-border text-text-primary font-medium text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors shrink-0 whitespace-nowrap"
-                >
-                  <QrCode size={14} className="text-text-primary" />
-                  <span>{showPersonalQr ? 'Hide QR' : 'View QR'}</span>
-                </button>
-              )}
-
-              {/* Remove: Only visible once a UPI ID is saved */}
-              {savedUpi && (
-                <button
-                  type="button"
-                  onClick={handleClearPersonalUpi}
-                  className="h-9 px-2.5 rounded-xl bg-surface hover:bg-red-500/10 border border-border text-text-secondary hover:text-google-red text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors shrink-0 whitespace-nowrap"
-                >
-                  <Trash2 size={13} />
-                  <span>Remove</span>
-                </button>
-              )}
-            </div>
-
-            {/* Incomplete / invalid format helper */}
-            {personalUpi.trim() && !isPersonalUpiValid && (
-              <div className="text-[11px] text-text-secondary pt-0.5">
-                Format: <span className="font-mono text-text-primary">username@bank</span>
-              </div>
-            )}
-
-            {/* Live Personal QR Code Preview */}
-            {showPersonalQr && personalQrUrl && savedUpi && (
-              <div className="p-4 sm:p-5 rounded-2xl bg-surface-hover/50 border border-border text-center space-y-2.5 animate-in fade-in duration-150">
-                <div className="inline-block p-3.5 bg-white rounded-2xl shadow-xs border border-neutral-200">
-                  <img 
-                    src={personalQrUrl} 
-                    alt="Personal UPI QR" 
-                    className="w-48 h-48 sm:w-52 sm:h-52 object-contain mx-auto rounded"
-                  />
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(savedUpi);
-                        setCopiedPersonalUpi(true);
-                        setTimeout(() => setCopiedPersonalUpi(false), 2000);
-                      } catch {}
-                    }}
-                    title="Click to copy UPI ID"
-                    aria-label={`Copy UPI ID ${savedUpi}`}
-                    className="group/upi inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-surface hover:bg-surface-active border border-border hover:border-google-blue/40 text-xs font-mono font-bold text-text-primary transition-all cursor-pointer select-none active:scale-95"
-                  >
-                    <span>{savedUpi}</span>
-                    {copiedPersonalUpi ? (
-                      <span className="inline-flex items-center gap-0.5 text-[10px] font-sans font-semibold text-emerald-600 dark:text-emerald-400">
-                        <Check size={11} strokeWidth={2.5} />
-                        Copied
-                      </span>
-                    ) : (
-                      <Copy size={11} className="text-text-secondary group-hover/upi:text-google-blue transition-colors shrink-0" />
-                    )}
-                  </button>
-                  <p className="text-[11px] text-text-secondary mt-1">
-                    Scan with any UPI app to settle directly
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       </div>
 

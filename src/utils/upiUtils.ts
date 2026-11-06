@@ -129,47 +129,8 @@ export async function generateUpiQrDataUrl(upiUri: string): Promise<string> {
   });
 }
 
-// Local storage keys
-const UPI_DIRECTORY_KEY = 'hisaab_upi_directory';
+// Local storage key for current user personal UPI cache
 const PERSONAL_UPI_KEY = 'hisaab_user_personal_upi';
-
-export function getSavedMemberUpi(keyOrEmail: string): string | null {
-  if (!keyOrEmail) return null;
-  try {
-    const dirStr = localStorage.getItem(UPI_DIRECTORY_KEY);
-    if (!dirStr) return null;
-    const dir = JSON.parse(dirStr);
-    return dir[keyOrEmail.toLowerCase()] || null;
-  } catch {
-    return null;
-  }
-}
-
-export function saveMemberUpi(keyOrEmail: string, upiId: string): void {
-  if (!keyOrEmail) return;
-  try {
-    const dirStr = localStorage.getItem(UPI_DIRECTORY_KEY);
-    const dir = dirStr ? JSON.parse(dirStr) : {};
-    const formatted = formatUpiId(upiId);
-    if (formatted) {
-      dir[keyOrEmail.toLowerCase()] = formatted;
-    } else {
-      delete dir[keyOrEmail.toLowerCase()];
-    }
-    localStorage.setItem(UPI_DIRECTORY_KEY, JSON.stringify(dir));
-  } catch {}
-}
-
-export function removeMemberUpi(keyOrEmail: string): void {
-  if (!keyOrEmail) return;
-  try {
-    const dirStr = localStorage.getItem(UPI_DIRECTORY_KEY);
-    if (!dirStr) return;
-    const dir = JSON.parse(dirStr);
-    delete dir[keyOrEmail.toLowerCase()];
-    localStorage.setItem(UPI_DIRECTORY_KEY, JSON.stringify(dir));
-  } catch {}
-}
 
 export function getSavedPersonalUpi(): string {
   try {

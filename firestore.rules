@@ -89,9 +89,9 @@ service cloud.firestore {
       allow read: if true;
     }
 
-    // User profiles
+    // User profiles: readable by signed-in users for peer settlements, writable only by owner
     match /users/{userId} {
-      allow read: if isOwner(userId);
+      allow read: if isSignedIn();
       allow create, update: if isOwner(userId) && isValidId(userId) && isValidUserProfile(request.resource.data);
       allow delete: if isOwner(userId);
     }

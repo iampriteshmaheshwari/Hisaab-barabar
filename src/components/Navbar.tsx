@@ -13,7 +13,9 @@ import {
   LogIn,
   Download,
   CloudUpload,
-  UserCog
+  UserCog,
+  User,
+  ChevronRight
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import type { ExpenseGroup, UserRole, ThemeMode, AppNotification } from '../types';
@@ -49,6 +51,7 @@ interface NavbarProps {
   digestTime?: string;
   isStandalone?: boolean;
   onOpenInstallModal?: () => void;
+  onOpenProfileSetup?: () => void;
   onShowToast?: (msg: string | { message: string; subMessage?: string; type?: 'info' | 'success' | 'warning' | 'error' }) => void;
 }
 
@@ -97,6 +100,7 @@ export function Navbar({
   digestTime = '21:00',
   isStandalone = false,
   onOpenInstallModal,
+  onOpenProfileSetup,
   onShowToast
 }: NavbarProps) {
   const { user, signInWithGoogle, logOut } = useAuth();
@@ -661,14 +665,45 @@ export function Navbar({
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="text-xs sm:text-sm font-semibold text-text-primary truncate">
-                          {user.displayName || 'Google Account'}
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs sm:text-sm font-semibold text-text-primary truncate">
+                            {user.displayName || 'Google Account'}
+                          </span>
+                          {onOpenProfileSetup && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowUserMenu(false);
+                                onOpenProfileSetup();
+                              }}
+                              className="text-[11px] font-medium text-google-blue hover:underline cursor-pointer shrink-0"
+                            >
+                              Edit
+                            </button>
+                          )}
                         </div>
                         <div className="text-xs text-text-secondary truncate">
                           {user.email}
                         </div>
                       </div>
                     </div>
+
+                    {onOpenProfileSetup && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowUserMenu(false);
+                          onOpenProfileSetup();
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs sm:text-sm text-text-primary hover:bg-surface-hover rounded-xl transition-colors flex items-center justify-between cursor-pointer font-medium"
+                      >
+                        <div className="flex items-center gap-2">
+                          <User size={14} className="text-google-blue shrink-0" />
+                          <span>Profile &amp; Receiving UPI</span>
+                        </div>
+                        <ChevronRight size={13} className="text-text-secondary shrink-0" />
+                      </button>
+                    )}
 
                     <button
                       type="button"

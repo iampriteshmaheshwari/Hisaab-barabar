@@ -4,14 +4,23 @@ import {
   Smartphone, 
   Check, 
   ArrowRight,
-  AlertCircle
+  AlertCircle,
+  X,
+  QrCode
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
-import { formatUpiId, isValidUpiId, getSavedPersonalUpi } from '../../utils/upiUtils';
+import { 
+  formatUpiId, 
+  isValidUpiId, 
+  getSavedPersonalUpi,
+  buildUpiPaymentUri,
+  generateUpiQrDataUrl
+} from '../../utils/upiUtils';
 
 interface ProfileSetupModalProps {
   isOpen: boolean;
   user: User | null;
+  onClose?: () => void;
   onComplete: (displayName: string, upiId: string) => Promise<void> | void;
 }
 
@@ -20,12 +29,27 @@ const COMMON_HANDLES = ['@oksbi', '@okhdfcbank', '@okicici', '@paytm', '@ybl', '
 export function ProfileSetupModal({
   isOpen,
   user,
+  onClose,
   onComplete
 }: ProfileSetupModalProps) {
   const [fullName, setFullName] = useState('');
   const [upiId, setUpiId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [showQrPreview, setShowQrPreview] = useState(false);
+  const [qrPreviewUrl, setQrPreviewUrl] = useState('');
+
+  // Check if user has already completed profile previously or is editing
+  const isAlreadyCompleted = useMemo(() => {
+    if (!user) return false;
+    try {
+      return localStorage.getItem(`hisaab_profile_completed_${user.uid}`) === 'true';
+    } catch {
+      return false;
+    }
+  }, [user]);
+
+  const isEditing = isAlreadyCompleted || Boolean(onClose);
 
   // Real-time validation for UPI ID: null if empty, true if valid, false if invalid
   const isUpiFieldValid = useMemo(() => {
@@ -40,8 +64,27 @@ export function ProfileSetupModal({
       setFullName(initialName);
       setUpiId(getSavedPersonalUpi() || '');
       setErrorMsg('');
+      setShowQrPreview(false);
     }
   }, [isOpen, user]);
+
+  // Generate live QR code for verification
+  useEffect(() => {
+    let active = true;
+    const clean = formatUpiId(upiId);
+    if (clean && isValidUpiId(clean)) {
+      const uri = buildUpiPaymentUri({ pa: clean });
+      generateUpiQrDataUrl(uri)
+        .then(url => {
+          if (active) setQrPreviewUrl(url);
+        })
+        .catch(console.warn);
+    } else {
+      setQrPreviewUrl('');
+      setShowQrPreview(false);
+    }
+    return () => { active = false; };
+  }, [upiId]);
 
   if (!isOpen || !user) return null;
 
@@ -85,6 +128,7 @@ export function ProfileSetupModal({
     setIsSubmitting(true);
     try {
       await onComplete(trimmedName, formattedUpi);
+      if (onClose) onClose();
     } catch (err: any) {
       setErrorMsg(err?.message || 'Could not save profile. Please try again.');
     } finally {
@@ -98,6 +142,7 @@ export function ProfileSetupModal({
     setIsSubmitting(true);
     try {
       await onComplete(trimmedName, '');
+      if (onClose) onClose();
     } catch (err: any) {
       setErrorMsg(err?.message || 'Could not complete profile.');
     } finally {
@@ -111,9 +156,12 @@ export function ProfileSetupModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="profile-setup-title"
+      onClick={() => {
+        if (onClose) onClose();
+      }}
     >
       <div 
-        className="bg-surface text-text-primary w-full sm:max-w-md rounded-t-[28px] sm:rounded-[28px] border border-border shadow-2xl overflow-hidden flex flex-col animate-in slide-in-from-bottom duration-250"
+        className="relative bg-surface text-text-primary w-full sm:max-w-md rounded-t-[28px] sm:rounded-[28px] border border-border shadow-2xl overflow-hidden flex flex-col max-h-[92dvh] animate-in slide-in-from-bottom duration-250"
         onClick={(e) => e.stopPropagation()}
       >
         {/* iOS Mobile Grab Handle */}
@@ -121,7 +169,19 @@ export function ProfileSetupModal({
           <div className="w-10 h-1 rounded-full bg-surface-active" />
         </div>
 
-        {/* Modal Header: Concise & Subtle */}
+        {/* Close Button */}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-4 right-4 w-8 h-8 rounded-full flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer transition-colors z-10"
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        )}
+
+        {/* Modal Header */}
         <div className="px-6 pt-3.5 pb-1.5 text-center space-y-1.5 shrink-0">
           <div className="relative mx-auto w-12 h-12 rounded-full bg-google-blue/10 border-2 border-surface shadow-xs flex items-center justify-center overflow-hidden">
             {user.photoURL ? (
@@ -144,16 +204,18 @@ export function ProfileSetupModal({
               id="profile-setup-title"
               className="text-lg font-bold tracking-tight text-text-primary"
             >
-              Complete your profile
+              {isEditing ? 'Edit Profile' : 'Complete your profile'}
             </h2>
             <p className="text-xs text-text-secondary">
-              Set your name and UPI for group settlements.
+              {isEditing 
+                ? 'Update your name and receiving UPI ID.' 
+                : 'Set your name and UPI for group settlements.'}
             </p>
           </div>
         </div>
 
-        {/* Form Body: Compact & Zero-Scroll */}
-        <form onSubmit={handleSubmit} className="px-6 py-2 space-y-3">
+        {/* Form Body */}
+        <form onSubmit={handleSubmit} className="px-6 py-2 space-y-3 overflow-y-auto no-scrollbar">
           {errorMsg && (
             <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
               <AlertCircle size={14} className="shrink-0" />
@@ -180,20 +242,20 @@ export function ProfileSetupModal({
                 onChange={(e) => setFullName(e.target.value)}
                 placeholder="Your name"
                 required
-                autoFocus
+                autoFocus={!isEditing}
                 className="w-full h-11 pl-10 pr-3.5 rounded-xl bg-surface-hover/70 border border-border text-sm text-text-primary outline-none focus:border-google-blue focus:ring-1 focus:ring-google-blue/30 transition-all font-medium placeholder:text-text-secondary/50"
               />
             </div>
           </div>
 
-          {/* UPI ID Field (Consistent typography & real-time validation) */}
+          {/* UPI ID Field */}
           <div className="space-y-1">
             <div className="flex items-center justify-between">
               <label 
                 htmlFor="profile-upi"
                 className="block text-[11px] font-semibold uppercase tracking-wider text-text-secondary"
               >
-                UPI ID
+                Receiving UPI ID
               </label>
               {isUpiFieldValid === true && (
                 <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
@@ -243,29 +305,76 @@ export function ProfileSetupModal({
                 </button>
               ))}
             </div>
+
+            {/* Live QR Verification Toggle */}
+            {isUpiFieldValid === true && qrPreviewUrl && (
+              <div className="pt-1.5 flex flex-col items-center">
+                <button
+                  type="button"
+                  onClick={() => setShowQrPreview(!showQrPreview)}
+                  className="text-xs text-google-blue hover:underline font-medium flex items-center gap-1.5 cursor-pointer py-1"
+                >
+                  <QrCode size={13} />
+                  <span>{showQrPreview ? 'Hide QR Code' : 'Verify QR Code'}</span>
+                </button>
+                {showQrPreview && (
+                  <div className="p-3 bg-white rounded-2xl border border-neutral-200 shadow-xs flex flex-col items-center mx-auto mt-1 animate-in fade-in zoom-in-95 duration-150">
+                    <img src={qrPreviewUrl} alt="UPI QR Preview" className="w-36 h-36 object-contain" />
+                    <span className="text-[11px] text-neutral-500 mt-1 font-medium text-center">
+                      Scan to verify receiving account
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Primary & Secondary Actions */}
+          {/* Actions */}
           <div className="pt-2 pb-2 space-y-2">
             <button
               type="submit"
               disabled={isSubmitting || !fullName.trim()}
               className="w-full h-11 sm:h-12 bg-google-blue hover:bg-google-blue-hover active:scale-[0.98] disabled:opacity-50 text-white rounded-full text-sm font-semibold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm shadow-google-blue/25 select-none"
             >
-              <span>{isSubmitting ? 'Saving...' : 'Continue'}</span>
-              {!isSubmitting && <ArrowRight size={15} strokeWidth={2.4} />}
+              <span>
+                {isSubmitting 
+                  ? 'Saving...' 
+                  : isEditing 
+                  ? 'Save Changes' 
+                  : 'Continue'}
+              </span>
+              {!isSubmitting && (
+                isEditing ? <Check size={16} strokeWidth={2.4} /> : <ArrowRight size={15} strokeWidth={2.4} />
+              )}
             </button>
 
-            <div className="text-center">
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={handleSkipUpi}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors py-1 cursor-pointer"
-              >
-                Add UPI ID later
-              </button>
-            </div>
+            {isEditing ? (
+              onClose && (
+                <div className="text-center">
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={onClose}
+                    className="text-xs text-text-secondary hover:text-text-primary transition-colors py-1 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )
+            ) : (
+              !upiId.trim() && (
+                <div className="text-center">
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={handleSkipUpi}
+                    className="text-xs text-text-secondary hover:text-text-primary transition-colors py-1 cursor-pointer"
+                  >
+                    Add UPI ID later
+                  </button>
+                </div>
+              )
+            )}
           </div>
         </form>
       </div>
